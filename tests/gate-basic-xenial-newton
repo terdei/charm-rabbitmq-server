@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Amulet tests on a basic rabbitmq-server deployment on precise-icehouse."""
+"""Amulet tests on a basic rabbitmq-server deployment on xenial-newton."""
 
 from basic_deployment import RmqBasicDeployment
 
 if __name__ == '__main__':
-    deployment = RmqBasicDeployment(series='precise',
-                                    openstack='cloud:precise-icehouse',
-                                    source='cloud:precise-updates/icehouse')
+    deployment = RmqBasicDeployment(series='xenial',
+                                    openstack='cloud:xenial-newton',
+                                    source='cloud:xenial-updates/newton')
     deployment.run_tests()

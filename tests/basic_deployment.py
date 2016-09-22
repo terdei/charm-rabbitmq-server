@@ -62,7 +62,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         self._deploy()
 
         u.log.info('Waiting on extended status checks...')
-        exclude_services = ['mysql', 'nrpe']
+        exclude_services = ['nrpe']
 
         # Wait for deployment ready msgs, except exclusions
         self._auto_wait_for_status(exclude_services=exclude_services)
@@ -70,6 +70,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         # Specifically wait for rmq cluster status msgs
         u.rmq_wait_for_cluster(self, init_sleep=0)
 
+        self.d.sentry.wait()
         self._initialize_tests()
 
     def _add_services(self):
@@ -83,10 +84,12 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
             'name': 'rabbitmq-server',
             'units': 3
         }
-        other_services = [{'name': 'cinder'},
-                          {'name': 'mysql'},  # satisfy workload status
-                          {'name': 'keystone'},  # satisfy workload status
-                          {'name': 'nrpe'}]
+        other_services = [
+            {'name': 'cinder'},
+            {'name': 'percona-cluster', 'constraints': {'mem': '3072M'}},
+            {'name': 'keystone'},
+            {'name': 'nrpe'}
+        ]
 
         super(RmqBasicDeployment, self)._add_services(this_service,
                                                       other_services)
@@ -95,10 +98,10 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         """Add relations for the services."""
         relations = {
             'cinder:amqp': 'rabbitmq-server:amqp',
-            'cinder:shared-db': 'mysql:shared-db',
+            'cinder:shared-db': 'percona-cluster:shared-db',
             'cinder:identity-service': 'keystone:identity-service',
             'cinder:amqp': 'rabbitmq-server:amqp',
-            'keystone:shared-db': 'mysql:shared-db',
+            'keystone:shared-db': 'percona-cluster:shared-db',
             'nrpe:nrpe-external-master': 'rabbitmq-server:'
                                          'nrpe-external-master'
         }
@@ -115,18 +118,25 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
             'stats_cron_schedule': '*/1 * * * *'
         }
 
-        mysql_config = {'dataset-size': '50%'}
+        pxc_config = {
+            'dataset-size': '25%',
+            'max-connections': 1000,
+            'root-password': 'ChangeMe123',
+            'sst-password': 'ChangeMe123',
+        }
 
-        keystone_config = {'admin-password': 'openstack',
-                           'admin-token': 'ubuntutesting'}
+        keystone_config = {
+            'admin-password': 'openstack',
+            'admin-token': 'ubuntutesting',
+        }
 
         cinder_config = {}
 
         configs = {
             'rabbitmq-server': rmq_config,
-            'mysql': mysql_config,
+            'percona-cluster': pxc_config,
             'keystone': keystone_config,
-            'cinder': cinder_config
+            'cinder': cinder_config,
         }
         super(RmqBasicDeployment, self)._configure_services(configs)
 
@@ -137,7 +147,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         self.rmq1_sentry = self.d.sentry['rabbitmq-server'][1]
         self.rmq2_sentry = self.d.sentry['rabbitmq-server'][2]
         self.keystone_sentry = self.d.sentry['keystone'][0]
-        self.mysql_sentry = self.d.sentry['mysql'][0]
+        self.pxc_sentry = self.d.sentry['percona-cluster'][0]
         self.cinder_sentry = self.d.sentry['cinder'][0]
         self.nrpe_sentry = self.d.sentry['nrpe'][0]
         u.log.debug('openstack release val: {}'.format(
@@ -497,6 +507,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         u.log.debug('Enabling management_plugin charm config option...')
         config = {'management_plugin': 'True'}
         self.d.configure('rabbitmq-server', config)
+        self.d.sentry.wait()
         u.rmq_wait_for_cluster(self)
 
         # Check tcp connect to management plugin port
@@ -518,6 +529,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         u.log.debug('Disabling management_plugin charm config option...')
         config = {'management_plugin': 'False'}
         self.d.configure('rabbitmq-server', config)
+        self.d.sentry.wait()
         u.rmq_wait_for_cluster(self)
 
         # Negative check - tcp connect to management plugin port
@@ -591,6 +603,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
 
         u.log.debug('Setting cluster-partition-handling to autoheal...')
         self.d.configure('rabbitmq-server', set_alternate)
+        self.d.sentry.wait()
         u.rmq_wait_for_cluster(self)
 
         cmds = ["grep autoheal /etc/rabbitmq/rabbitmq.config"]
@@ -600,6 +613,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
 
         u.log.debug('Setting cluster-partition-handling back to default...')
         self.d.configure('rabbitmq-server', set_default)
+        self.d.sentry.wait()
         u.rmq_wait_for_cluster(self)
 
         u.log.info('OK\n')
@@ -616,4 +630,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         action_id = u.run_action(self.rmq0_sentry, "resume")
         assert u.wait_on_action(action_id), "Resume action failed."
         assert u.status_get(self.rmq0_sentry)[0] == "active"
+
+        self.d.sentry.wait()
+        u.rmq_wait_for_cluster(self)
         u.log.debug('OK')
