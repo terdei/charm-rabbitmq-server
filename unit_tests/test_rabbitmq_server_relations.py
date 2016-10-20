@@ -38,20 +38,25 @@ class RelationUtil(TestCase):
         super(RelationUtil, self).setUp()
 
     @patch('rabbitmq_server_relations.peer_store_and_set')
-    @patch('rabbitmq_server_relations.get_ipv6_addr')
     @patch('rabbitmq_server_relations.config')
     @patch('rabbitmq_server_relations.relation_set')
     @patch('rabbitmq_server_relations.cmp_pkgrevno')
     @patch('rabbitmq_server_relations.is_clustered')
     @patch('rabbitmq_server_relations.ssl_utils.configure_client_ssl')
-    @patch('rabbitmq_server_relations.unit_get')
+    @patch('rabbitmq_server_relations.rabbit.get_unit_ip')
     @patch('rabbitmq_server_relations.relation_get')
     @patch('rabbitmq_server_relations.is_elected_leader')
     def test_amqp_changed_compare_versions_ha_queues(
             self,
-            is_elected_leader, relation_get, unit_get, configure_client_ssl,
-            is_clustered, cmp_pkgrevno, relation_set, mock_config,
-            mock_get_ipv6_addr, mock_peer_store_and_set):
+            is_elected_leader,
+            relation_get,
+            get_unit_ip,
+            configure_client_ssl,
+            is_clustered,
+            cmp_pkgrevno,
+            relation_set,
+            mock_config,
+            mock_peer_store_and_set):
         """
         Compare version above and below 3.0.1.
         Make sure ha_queues is set correctly on each side.
@@ -65,8 +70,7 @@ class RelationUtil(TestCase):
 
         mock_config.side_effect = config
         host_addr = "10.1.2.3"
-        unit_get.return_value = host_addr
-        mock_get_ipv6_addr.return_value = [host_addr]
+        get_unit_ip.return_value = host_addr
         is_elected_leader.return_value = True
         relation_get.return_value = {}
         is_clustered.return_value = False
@@ -87,20 +91,25 @@ class RelationUtil(TestCase):
             relation_id=None)
 
     @patch('rabbitmq_server_relations.peer_store_and_set')
-    @patch('rabbitmq_server_relations.get_ipv6_addr')
     @patch('rabbitmq_server_relations.config')
     @patch('rabbitmq_server_relations.relation_set')
     @patch('rabbitmq_server_relations.cmp_pkgrevno')
     @patch('rabbitmq_server_relations.is_clustered')
     @patch('rabbitmq_server_relations.ssl_utils.configure_client_ssl')
-    @patch('rabbitmq_server_relations.unit_get')
+    @patch('rabbitmq_server_relations.rabbit.get_unit_ip')
     @patch('rabbitmq_server_relations.relation_get')
     @patch('rabbitmq_server_relations.is_elected_leader')
     def test_amqp_changed_compare_versions_ha_queues_prefer_ipv6(
             self,
-            is_elected_leader, relation_get, unit_get, configure_client_ssl,
-            is_clustered, cmp_pkgrevno, relation_set, mock_config,
-            mock_get_ipv6_addr, mock_peer_store_and_set):
+            is_elected_leader,
+            relation_get,
+            get_unit_ip,
+            configure_client_ssl,
+            is_clustered,
+            cmp_pkgrevno,
+            relation_set,
+            mock_config,
+            mock_peer_store_and_set):
         """
         Compare version above and below 3.0.1.
         Make sure ha_queues is set correctly on each side.
@@ -114,9 +123,7 @@ class RelationUtil(TestCase):
 
         mock_config.side_effect = config
         ipv6_addr = "2001:db8:1:0:f816:3eff:fed6:c140"
-        mock_get_ipv6_addr.return_value = [ipv6_addr]
-        host_addr = "10.1.2.3"
-        unit_get.return_value = host_addr
+        get_unit_ip.return_value = ipv6_addr
         is_elected_leader.return_value = True
         relation_get.return_value = {}
         is_clustered.return_value = False
@@ -125,13 +132,15 @@ class RelationUtil(TestCase):
         rabbitmq_server_relations.amqp_changed(None, None)
         mock_peer_store_and_set.assert_called_with(
             relation_settings={'private-address': ipv6_addr,
+                               'hostname': ipv6_addr,
                                'ha_queues': True},
             relation_id=None)
 
         cmp_pkgrevno.return_value = 1
         rabbitmq_server_relations.amqp_changed(None, None)
         mock_peer_store_and_set.assert_called_with(
-            relation_settings={'private-address': ipv6_addr},
+            relation_settings={'private-address': ipv6_addr,
+                               'hostname': ipv6_addr},
             relation_id=None)
 
     @patch.object(rabbitmq_server_relations, 'is_leader')

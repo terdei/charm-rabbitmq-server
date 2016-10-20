@@ -19,7 +19,6 @@ import shutil
 import sys
 import subprocess
 import glob
-import socket
 
 try:
     import yaml  # flake8: noqa
@@ -42,12 +41,7 @@ from charmhelpers.contrib.hahelpers.cluster import (
     is_elected_leader
 )
 from charmhelpers.contrib.openstack.utils import (
-    get_host_ip,
     is_unit_paused_set,
-)
-
-from charmhelpers.contrib.network.ip import (
-    get_ipv6_addr
 )
 
 import charmhelpers.contrib.storage.linux.ceph as ceph
@@ -74,7 +68,6 @@ from charmhelpers.core.hookenv import (
     service_name,
     local_unit,
     config,
-    unit_get,
     is_relation_made,
     Hooks,
     UnregisteredHookError,
@@ -82,7 +75,6 @@ from charmhelpers.core.hookenv import (
     charm_dir,
     status_set,
     unit_private_ip,
-    network_get_primary_address,
 )
 from charmhelpers.core.host import (
     cmp_pkgrevno,
@@ -102,7 +94,6 @@ from charmhelpers.contrib.peerstorage import (
     leader_get,
 )
 
-from charmhelpers.contrib.network.ip import get_address_in_network
 
 hooks = Hooks()
 
@@ -116,7 +107,7 @@ SCRIPTS_DIR = '/usr/local/bin'
 STATS_CRONFILE = '/etc/cron.d/rabbitmq-stats'
 STATS_DATAFILE = os.path.join(RABBIT_DIR, 'data',
                               '{}_queue_stats.dat'
-                              ''.format(socket.gethostname()))
+                              ''.format(rabbit.get_unit_hostname()))
 
 
 @hooks.hook('install.real')
@@ -124,25 +115,6 @@ STATS_DATAFILE = os.path.join(RABBIT_DIR, 'data',
 def install():
     pre_install_hooks()
     # NOTE(jamespage) install actually happens in config_changed hook
-
-
-def configure_nodename():
-    '''Set RABBITMQ_NODENAME to something that's resolvable by my peers'''
-    nodename = rabbit.get_local_nodename()
-    log('configuring nodename', level=INFO)
-    if (nodename and
-            rabbit.get_node_name() != 'rabbit@%s' % nodename):
-        log('forcing nodename=%s' % nodename, level=INFO)
-        # would like to have used the restart_on_change decorator, but
-        # need to stop it under current nodename prior to updating env
-        log('Stopping rabbitmq-server.')
-        service_stop('rabbitmq-server')
-        rabbit.update_rmq_env_conf(hostname='rabbit@%s' % nodename,
-                                   ipv6=config('prefer-ipv6'))
-        if not is_unit_paused_set():
-            log('Starting rabbitmq-server.')
-            service_restart('rabbitmq-server')
-            rabbit.wait_app()
 
 
 def configure_amqp(username, vhost, admin=False):
@@ -165,10 +137,7 @@ def configure_amqp(username, vhost, admin=False):
 
 @hooks.hook('amqp-relation-changed')
 def amqp_changed(relation_id=None, remote_unit=None):
-    if config('prefer-ipv6'):
-        host_addr = get_ipv6_addr()[0]
-    else:
-        host_addr = unit_get('private-address')
+    host_addr = rabbit.get_unit_ip()
 
     if not is_elected_leader('res_rabbitmq_vip'):
         # NOTE(jamespage) clear relation to deal with data being
@@ -225,30 +194,9 @@ def amqp_changed(relation_id=None, remote_unit=None):
                     queues[amqp]['username'],
                     queues[amqp]['vhost'])
 
-    if config('prefer-ipv6'):
-        relation_settings['private-address'] = host_addr
-    else:
-        hostname = None
-        fallback = unit_get('private-address')
-        if config('access-network'):
-            # NOTE(jamespage)
-            # override private-address settings if access-network is
-            # configured and an appropriate network interface is
-            # configured.
-            hostname = get_address_in_network(config('access-network'),
-                                              fallback)
-        else:
-            # NOTE(jamespage)
-            # Try using network spaces if access-network is not
-            # configured, fallback to private address if not
-            # supported
-            try:
-                hostname = network_get_primary_address('amqp')
-            except NotImplementedError:
-                hostname = fallback
-
-        relation_settings['hostname'] = \
-            relation_settings['private-address'] = hostname
+    relation_settings['hostname'] = \
+        relation_settings['private-address'] = \
+        rabbit.get_unit_ip(amqp_relation=True)
 
     ssl_utils.configure_client_ssl(relation_settings)
 
@@ -311,14 +259,9 @@ def is_sufficient_peers():
 @hooks.hook('cluster-relation-joined')
 def cluster_joined(relation_id=None):
     relation_settings = {
-        'hostname': rabbit.get_local_nodename(),
+        'hostname': rabbit.get_unit_hostname(),
+        'private-address': rabbit.get_unit_ip(),
     }
-
-    if config('prefer-ipv6'):
-        relation_settings['private-address'] = get_ipv6_addr()[0]
-    else:
-        relation_settings['private-address'] = get_host_ip(
-            unit_get('private-address'))
 
     relation_set(relation_id=relation_id,
                  relation_settings=relation_settings)
@@ -328,8 +271,6 @@ def cluster_joined(relation_id=None):
         log('hacluster relation is present, skipping native '
             'rabbitmq cluster config.')
         return
-
-    configure_nodename()
 
     try:
         if not is_leader():
@@ -353,6 +294,7 @@ def cluster_joined(relation_id=None):
         cookie = open(rabbit.COOKIE_PATH, 'r').read().strip()
         peer_store('cookie', cookie)
         peer_store('leader_node_ip', unit_private_ip())
+        peer_store('leader_node_hostname', rabbit.get_unit_hostname())
 
 
 @hooks.hook('cluster-relation-changed')
@@ -670,8 +612,9 @@ MAN_PLUGIN = 'rabbitmq_management'
 @harden()
 def config_changed():
 
-    if config('prefer-ipv6'):
-        rabbit.assert_charm_supports_ipv6()
+    # Update hosts with this unit's information
+    rabbit.update_hosts_file({rabbit.get_unit_ip():
+                              rabbit.get_unit_hostname()})
 
     # Add archive source if provided
     add_source(config('source'), config('key'))
@@ -689,8 +632,6 @@ def config_changed():
 
     chown(RABBIT_DIR, rabbit.RABBIT_USER, rabbit.RABBIT_USER)
     chmod(RABBIT_DIR, 0o775)
-
-    configure_nodename()
 
     if config('management_plugin') is True:
         rabbit.enable_plugin(MAN_PLUGIN)
