@@ -21,6 +21,7 @@ import tempfile
 import random
 import time
 import socket
+from collections import OrderedDict
 
 from rabbitmq_context import (
     RabbitMQSSLContext,
@@ -38,6 +39,11 @@ from charmhelpers.contrib.openstack.utils import (
     is_unit_paused_set,
 )
 
+from charmhelpers.contrib.network.ip import (
+    get_ipv6_addr,
+    get_address_in_network,
+)
+
 from charmhelpers.core.hookenv import (
     relation_ids,
     related_units,
@@ -49,6 +55,8 @@ from charmhelpers.core.hookenv import (
     unit_get,
     relation_set,
     application_version_set,
+    config,
+    network_get_primary_address,
 )
 
 from charmhelpers.core.host import (
@@ -66,9 +74,9 @@ from charmhelpers.contrib.peerstorage import (
     peer_retrieve
 )
 
+
 from charmhelpers.fetch import get_upstream_version
 
-from collections import OrderedDict
 
 PACKAGES = ['rabbitmq-server', 'python-amqplib', 'lockfile-progs']
 
@@ -337,7 +345,7 @@ def wait_app():
         pid_file = run_dir + 'pid'
     else:
         pid_file = '/var/lib/rabbitmq/mnesia/rabbit@' \
-                   + get_local_nodename() + '.pid'
+                   + socket.gethostname() + '.pid'
     log('Waiting for rabbitmq app to start: {}'.format(pid_file), DEBUG)
     try:
         rabbitmqctl('wait', pid_file)
@@ -402,7 +410,7 @@ def cluster_with():
             join_cluster(node)
             # NOTE: toggle the cluster relation to ensure that any peers
             #       already clustered re-assess status correctly
-            relation_set(clustered=get_local_nodename())
+            relation_set(clustered=get_unit_hostname())
             return True
         except subprocess.CalledProcessError as e:
             status_set('blocked', 'Failed to cluster with %s. Exception: %s'
@@ -674,12 +682,17 @@ def running_nodes():
 
 @cached
 def leader_node():
-    ''' Provide the leader node for clustering '''
+    ''' Provide the leader node for clustering
+
+    @returns leader node's hostname or None
+    '''
     # Each rabbitmq node should join_cluster with the leader
     # to avoid split-brain clusters.
-    leader_node_ip = peer_retrieve('leader_node_ip')
-    if leader_node_ip:
-        return "rabbit@" + get_node_hostname(leader_node_ip)
+    leader_node_hostname = peer_retrieve('leader_node_hostname')
+    if leader_node_hostname:
+        return "rabbit@" + leader_node_hostname
+    else:
+        return None
 
 
 def get_node_hostname(ip_addr):
@@ -857,3 +870,45 @@ def _pause_resume_helper(f, configs):
     f(assess_status_func(configs),
       services=services(),
       ports=None)
+
+
+def get_unit_ip(amqp_relation=False):
+    """Return this unit's IP.
+    Future proof to allow for network spaces or other more complex addresss
+    selection.
+
+    @raises Exception if prefer-ipv6 is configured but IPv6 unsupported.
+    @returns IPv6 or IPv4 address
+    """
+
+    fallback = get_host_ip(unit_get('private-address'))
+    if config('prefer-ipv6'):
+        assert_charm_supports_ipv6()
+        return get_ipv6_addr()[0]
+    elif amqp_relation:
+        if config('access-network'):
+            # NOTE(jamespage)
+            # override private-address settings if access-network is
+            # configured and an appropriate network interface is
+            # configured.
+            return get_address_in_network(config('access-network'),
+                                          fallback)
+        else:
+            # NOTE(jamespage)
+            # Try using network spaces if access-network is not
+            # configured, fallback to private address if not
+            # supported
+            try:
+                return network_get_primary_address('amqp')
+            except NotImplementedError:
+                return fallback
+    else:
+        return fallback
+
+
+def get_unit_hostname():
+    """Return this unit's hostname.
+
+    @returns hostname
+    """
+    return socket.gethostname()
