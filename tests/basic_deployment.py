@@ -70,7 +70,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         # Specifically wait for rmq cluster status msgs
         u.rmq_wait_for_cluster(self, init_sleep=0)
 
-        self.d.sentry.wait()
+        self.d.sentry.wait(timeout=900)
         self._initialize_tests()
 
     def _add_services(self):
@@ -507,7 +507,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         u.log.debug('Enabling management_plugin charm config option...')
         config = {'management_plugin': 'True'}
         self.d.configure('rabbitmq-server', config)
-        self.d.sentry.wait()
+        self.d.sentry.wait(timeout=900)
         u.rmq_wait_for_cluster(self)
 
         # Check tcp connect to management plugin port
@@ -529,7 +529,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         u.log.debug('Disabling management_plugin charm config option...')
         config = {'management_plugin': 'False'}
         self.d.configure('rabbitmq-server', config)
-        self.d.sentry.wait()
+        self.d.sentry.wait(timeout=900)
         u.rmq_wait_for_cluster(self)
 
         # Negative check - tcp connect to management plugin port
@@ -603,7 +603,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
 
         u.log.debug('Setting cluster-partition-handling to autoheal...')
         self.d.configure('rabbitmq-server', set_alternate)
-        self.d.sentry.wait()
+        self.d.sentry.wait(timeout=900)
         u.rmq_wait_for_cluster(self)
 
         cmds = ["grep autoheal /etc/rabbitmq/rabbitmq.config"]
@@ -613,7 +613,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
 
         u.log.debug('Setting cluster-partition-handling back to default...')
         self.d.configure('rabbitmq-server', set_default)
-        self.d.sentry.wait()
+        self.d.sentry.wait(timeout=900)
         u.rmq_wait_for_cluster(self)
 
         u.log.info('OK\n')
@@ -631,6 +631,6 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         assert u.wait_on_action(action_id), "Resume action failed."
         assert u.status_get(self.rmq0_sentry)[0] == "active"
 
-        self.d.sentry.wait()
+        self.d.sentry.wait(timeout=900)
         u.rmq_wait_for_cluster(self)
         u.log.debug('OK')
