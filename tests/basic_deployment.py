@@ -380,24 +380,6 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
 
         u.log.info('OK\n')
 
-    def test_300_rmq_config(self):
-        """Verify the data in the rabbitmq conf file."""
-        conf = '/etc/rabbitmq/rabbitmq-env.conf'
-        sentry_units = self._get_rmq_sentry_units()
-        for unit in sentry_units:
-            host_name = unit.file_contents('/etc/hostname').strip()
-            u.log.debug('Checking rabbitmq config file data on '
-                        '{} ({})...'.format(unit.info['unit_name'],
-                                            host_name))
-            expected = {
-                'RABBITMQ_NODENAME': 'rabbit@{}'.format(host_name)
-            }
-
-            file_contents = unit.file_contents(conf)
-            u.validate_sectionless_conf(file_contents, expected)
-
-        u.log.info('OK\n')
-
     def test_400_rmq_cluster_running_nodes(self):
         """Verify that cluster status from each rmq juju unit shows
         every cluster node as a running member in that cluster."""

@@ -180,11 +180,9 @@ class UtilsTests(unittest.TestCase):
                          'juju-devel3-machine-13')
         mock_get_hostname.assert_called_with('192.168.20.50', fqdn=False)
 
-    @mock.patch('rabbit_utils.get_node_hostname')
     @mock.patch('rabbit_utils.peer_retrieve')
-    def test_leader_node(self, mock_peer_retrieve, mock_get_node_hostname):
-        mock_peer_retrieve.return_value = '192.168.20.50'
-        mock_get_node_hostname.return_value = 'juju-devel3-machine-15'
+    def test_leader_node(self, mock_peer_retrieve):
+        mock_peer_retrieve.return_value = 'juju-devel3-machine-15'
         self.assertEqual(rabbit_utils.leader_node(),
                          'rabbit@juju-devel3-machine-15')
 
