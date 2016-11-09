@@ -3,7 +3,7 @@ bootstrap: True
 # Re-use bootstrap node.
 reset: True
 # Use tox/requirements to drive the venv instead of bundletester's venv feature.
-virtualenv: False
+virtualenv: True
 # Leave makefile empty, otherwise unit/lint tests will rerun ahead of amulet.
 makefile: []
 # Do not specify juju PPA sources.  Juju is presumed to be pre-installed
@@ -15,3 +15,5 @@ makefile: []
 # and tox instead.  ie. The venv is constructed before bundletester
 # is invoked.
 #python-packages:
+requirements:
+  - test-requirements.txt
