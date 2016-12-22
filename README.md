@@ -55,9 +55,13 @@ The charm also supports use of arbitary archive key's for use with private repos
 
     juju set rabbitmq-server key="C6CEA0C9"
 
-Note that in clustered configurations, the upgrade can be a bit racey as the services restart and re-cluster; this is resolvable using:
+Note that in clustered configurations, the upgrade can be a bit racey as the services restart and re-cluster; this is resolvable using (with Juju version < 2.0) :
 
     juju resolved --retry rabbitmq-server/1
+
+Or using the following command with Juju 2.0 and above:
+
+    juju resolved rabbitmq-server/1
 
 # Network Spaces support
 
