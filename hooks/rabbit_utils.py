@@ -48,15 +48,19 @@ from charmhelpers.core.hookenv import (
     relation_ids,
     related_units,
     log, ERROR,
+    WARNING,
     INFO, DEBUG,
     service_name,
     status_set,
     cached,
     unit_get,
     relation_set,
+    relation_get,
     application_version_set,
     config,
     network_get_primary_address,
+    is_leader,
+    leader_get,
 )
 
 from charmhelpers.core.host import (
@@ -258,7 +262,7 @@ def set_ha_mode(vhost, mode, params=None, sync_mode='automatic'):
 
     if caching_cmp_pkgrevno('rabbitmq-server', '3.0.0') < 0:
         log(("Mirroring queues cannot be enabled, only supported "
-             "in rabbitmq-server >= 3.0"), level='WARN')
+             "in rabbitmq-server >= 3.0"), level=WARNING)
         log(("More information at http://www.rabbitmq.com/blog/"
              "2012/11/19/breaking-things-with-rabbitmq-3-0"), level='INFO')
         return
@@ -285,7 +289,7 @@ def clear_ha_mode(vhost, name='HA', force=False):
     """
     if cmp_pkgrevno('rabbitmq-server', '3.0.0') < 0:
         log(("Mirroring queues not supported "
-             "in rabbitmq-server >= 3.0"), level='WARN')
+             "in rabbitmq-server >= 3.0"), level=WARNING)
         log(("More information at http://www.rabbitmq.com/blog/"
              "2012/11/19/breaking-things-with-rabbitmq-3-0"), level='INFO')
         return
@@ -305,7 +309,7 @@ def set_all_mirroring_queues(enable):
     """
     if cmp_pkgrevno('rabbitmq-server', '3.0.0') < 0:
         log(("Mirroring queues not supported "
-             "in rabbitmq-server >= 3.0"), level='WARN')
+             "in rabbitmq-server >= 3.0"), level=WARNING)
         log(("More information at http://www.rabbitmq.com/blog/"
              "2012/11/19/breaking-things-with-rabbitmq-3-0"), level='INFO')
         return
@@ -410,7 +414,7 @@ def cluster_with():
             join_cluster(node)
             # NOTE: toggle the cluster relation to ensure that any peers
             #       already clustered re-assess status correctly
-            relation_set(clustered=get_unit_hostname())
+            relation_set(clustered=get_unit_hostname(), timestamp=time.time())
             return True
         except subprocess.CalledProcessError as e:
             status_set('blocked', 'Failed to cluster with %s. Exception: %s'
@@ -701,9 +705,9 @@ def get_node_hostname(ip_addr):
         nodename = get_hostname(ip_addr, fqdn=False)
     except:
         log('Cannot resolve hostname for %s using DNS servers' % ip_addr,
-            level='WARNING')
+            level=WARNING)
         log('Falling back to use socket.gethostname()',
-            level='WARNING')
+            level=WARNING)
         # If the private-address is not resolvable using DNS
         # then use the current hostname
         nodename = socket.gethostname()
@@ -734,8 +738,11 @@ def assess_cluster_status(*args):
     ''' Assess the status for the current running unit '''
     # NOTE: ensure rabbitmq is actually installed before doing
     #       any checks
-    if os.path.exists(RABBITMQ_CTL):
+    if rabbitmq_is_installed():
         # Clustering Check
+        if not is_sufficient_peers():
+            return 'waiting', ("Waiting for all {} peers to complete the "
+                               "cluster.".format(config('min-cluster-size')))
         peer_ids = relation_ids('cluster')
         if peer_ids and len(related_units(peer_ids[0])):
             if not clustered():
@@ -912,3 +919,128 @@ def get_unit_hostname():
     @returns hostname
     """
     return socket.gethostname()
+
+
+def is_sufficient_peers():
+    """Sufficient number of expected peers to build a complete cluster
+
+    If min-cluster-size has been provided, check that we have sufficient
+    number of peers as expected for a complete cluster.
+
+    If not defined assume a single unit.
+
+    @returns boolean
+    """
+    min_size = config('min-cluster-size')
+    if min_size:
+        log("Checking for minimum of {} peer units".format(min_size),
+            level=DEBUG)
+
+        # Include this unit
+        units = 1
+        for rid in relation_ids('cluster'):
+            units += len(related_units(rid))
+
+        if units < min_size:
+            log("Insufficient number of peer units to form cluster "
+                "(expected=%s, got=%s)" % (min_size, units), level=INFO)
+            return False
+        else:
+            log("Sufficient number of peer units to form cluster {}"
+                "".format(min_size, level=DEBUG))
+            return True
+    else:
+        log("min-cluster-size is not defined, race conditions may occur if "
+            "this is not a single unit deployment.", level=WARNING)
+        return True
+
+
+def rabbitmq_is_installed():
+    """Determine if rabbitmq is installed
+
+    @returns boolean
+    """
+    return os.path.exists(RABBITMQ_CTL)
+
+
+def cluster_ready():
+    """Determine if each node in the cluster is ready and the cluster is
+    complete with the expected number of peers.
+
+    Once cluster_ready returns True it is safe to execute client relation
+    hooks. Having min-cluster-size set will guarantee cluster_ready will not
+    return True until the expected number of peers are clustered and ready.
+
+    If min-cluster-size is not set it must assume the cluster is ready in order
+    to allow for single unit deployments.
+
+    @returns boolean
+    """
+    min_size = config('min-cluster-size')
+    units = 1
+    for relation_id in relation_ids('cluster'):
+        units += len(related_units(relation_id))
+    if not min_size:
+        min_size = units
+
+    if not is_sufficient_peers():
+        return False
+    elif min_size > 1:
+        if not clustered():
+            return False
+        clustered_units = 1
+        for relation_id in relation_ids('cluster'):
+            for remote_unit in related_units(relation_id):
+                if not relation_get(attribute='clustered',
+                                    rid=relation_id,
+                                    unit=remote_unit):
+                    log("{} is not yet clustered".format(remote_unit),
+                        DEBUG)
+                    return False
+                else:
+                    clustered_units += 1
+        if clustered_units < min_size:
+            log("Fewer than minimum cluster size:{} rabbit units reporting "
+                "clustered".format(min_size),
+                DEBUG)
+            return False
+        else:
+            log("All {} rabbit units reporting clustered"
+                "".format(min_size),
+                DEBUG)
+            return True
+
+    log("Must assume this is a single unit returning 'cluster' ready", DEBUG)
+    return True
+
+
+def client_node_is_ready():
+    """Determine if the leader node has set amqp client data
+
+    @returns boolean
+    """
+    # Bail if this unit is paused
+    if is_unit_paused_set():
+        return False
+    for rid in relation_ids('amqp'):
+        if leader_get(attribute='{}_password'.format(rid)):
+            return True
+    return False
+
+
+def leader_node_is_ready():
+    """Determine if the leader node is ready to handle client relationship
+    hooks.
+
+    IFF rabbit is not paused, is installed, this is the leader node and the
+    cluster is complete.
+
+    @returns boolean
+    """
+    # Paused check must run before other checks
+    # Bail if this unit is paused
+    if is_unit_paused_set():
+        return False
+    return (rabbitmq_is_installed() and
+            is_leader() and
+            cluster_ready())

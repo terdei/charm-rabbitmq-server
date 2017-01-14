@@ -14,12 +14,12 @@
 
 import mock
 import os
-import unittest
 import tempfile
 import sys
 import collections
 from functools import wraps
 
+from test_utils import CharmTestCase
 
 with mock.patch('charmhelpers.core.hookenv.cached') as cached:
     def passthrough(func):
@@ -33,8 +33,20 @@ with mock.patch('charmhelpers.core.hookenv.cached') as cached:
 
 sys.modules['MySQLdb'] = mock.Mock()
 
+TO_PATCH = [
+    # charmhelpers.core.hookenv
+    'is_leader',
+    'related_units',
+    'relation_ids',
+    'relation_get',
+    'relation_set',
+    'leader_get',
+    'config',
+    'is_unit_paused_set',
+]
 
-class ConfigRendererTests(unittest.TestCase):
+
+class ConfigRendererTests(CharmTestCase):
 
     class FakeContext(object):
         def __call__(self, *a, **k):
@@ -49,7 +61,8 @@ class ConfigRendererTests(unittest.TestCase):
     )
 
     def setUp(self):
-        super(ConfigRendererTests, self).setUp()
+        super(ConfigRendererTests, self).setUp(rabbit_utils,
+                                               TO_PATCH)
         self.renderer = rabbit_utils.ConfigRenderer(
             self.config_map)
 
@@ -83,9 +96,10 @@ RABBITMQCTL_CLUSTERSTATUS_SOLO = """Cluster status of node 'rabbit@juju-devel3-m
  """
 
 
-class UtilsTests(unittest.TestCase):
+class UtilsTests(CharmTestCase):
     def setUp(self):
-        super(UtilsTests, self).setUp()
+        super(UtilsTests, self).setUp(rabbit_utils,
+                                      TO_PATCH)
 
     @mock.patch("rabbit_utils.log")
     def test_update_empty_hosts_file(self, mock_log):
@@ -346,3 +360,159 @@ class UtilsTests(unittest.TestCase):
         check_call.return_value = 0
         local_nodename.return_value = 'rabbitmq-server-0'
         self.assertTrue(rabbit_utils.wait_app())
+
+    @mock.patch.object(rabbit_utils, 'is_leader')
+    @mock.patch.object(rabbit_utils, 'related_units')
+    @mock.patch.object(rabbit_utils, 'relation_ids')
+    @mock.patch.object(rabbit_utils, 'config')
+    def test_is_sufficient_peers(self, mock_config, mock_relation_ids,
+                                 mock_related_units, mock_is_leader):
+        # With leadership Election
+        mock_is_leader.return_value = False
+        _config = {'min-cluster-size': None}
+        mock_config.side_effect = lambda key: _config.get(key)
+        self.assertTrue(rabbit_utils.is_sufficient_peers())
+
+        mock_is_leader.return_value = False
+        mock_relation_ids.return_value = ['cluster:0']
+        mock_related_units.return_value = ['test/0']
+        _config = {'min-cluster-size': 3}
+        mock_config.side_effect = lambda key: _config.get(key)
+        self.assertFalse(rabbit_utils.is_sufficient_peers())
+
+        mock_is_leader.return_value = False
+        mock_related_units.return_value = ['test/0', 'test/1']
+        _config = {'min-cluster-size': 3}
+        mock_config.side_effect = lambda key: _config.get(key)
+        self.assertTrue(rabbit_utils.is_sufficient_peers())
+
+    @mock.patch.object(rabbit_utils.os.path, 'exists')
+    def test_rabbitmq_is_installed(self, mock_os_exists):
+        mock_os_exists.return_value = True
+        self.assertTrue(rabbit_utils.rabbitmq_is_installed())
+
+        mock_os_exists.return_value = False
+        self.assertFalse(rabbit_utils.rabbitmq_is_installed())
+
+    @mock.patch.object(rabbit_utils, 'clustered')
+    @mock.patch.object(rabbit_utils, 'rabbitmq_is_installed')
+    @mock.patch.object(rabbit_utils, 'is_sufficient_peers')
+    def test_cluster_ready(self, mock_is_sufficient_peers,
+                           mock_rabbitmq_is_installed, mock_clustered):
+
+        # Not sufficient number of peers
+        mock_is_sufficient_peers.return_value = False
+        self.assertFalse(rabbit_utils.cluster_ready())
+
+        # This unit not yet clustered
+        mock_is_sufficient_peers.return_value = True
+        self.relation_ids.return_value = ['cluster:0']
+        self.related_units.return_value = ['test/0', 'test/1']
+        self.relation_get.return_value = 'teset/0'
+        _config = {'min-cluster-size': 3}
+        self.config.side_effect = lambda key: _config.get(key)
+        mock_clustered.return_value = False
+        self.assertFalse(rabbit_utils.cluster_ready())
+
+        # Not all cluster ready
+        mock_is_sufficient_peers.return_value = True
+        self.relation_ids.return_value = ['cluster:0']
+        self.related_units.return_value = ['test/0', 'test/1']
+        self.relation_get.return_value = False
+        _config = {'min-cluster-size': 3}
+        self.config.side_effect = lambda key: _config.get(key)
+        mock_clustered.return_value = True
+        self.assertFalse(rabbit_utils.cluster_ready())
+
+        # All cluster ready
+        mock_is_sufficient_peers.return_value = True
+        self.relation_ids.return_value = ['cluster:0']
+        self.related_units.return_value = ['test/0', 'test/1']
+        self.relation_get.return_value = 'teset/0'
+        _config = {'min-cluster-size': 3}
+        self.config.side_effect = lambda key: _config.get(key)
+        mock_clustered.return_value = True
+        self.assertTrue(rabbit_utils.cluster_ready())
+
+        # Not all cluster ready no min-cluster-size
+        mock_is_sufficient_peers.return_value = True
+        self.relation_ids.return_value = ['cluster:0']
+        self.related_units.return_value = ['test/0', 'test/1']
+        self.relation_get.return_value = False
+        _config = {'min-cluster-size': None}
+        self.config.side_effect = lambda key: _config.get(key)
+        mock_clustered.return_value = True
+        self.assertFalse(rabbit_utils.cluster_ready())
+
+        # All cluster ready no min-cluster-size
+        mock_is_sufficient_peers.return_value = True
+        self.relation_ids.return_value = ['cluster:0']
+        self.related_units.return_value = ['test/0', 'test/1']
+        self.relation_get.return_value = 'teset/0'
+        _config = {'min-cluster-size': None}
+        self.config.side_effect = lambda key: _config.get(key)
+        mock_clustered.return_value = True
+        self.assertTrue(rabbit_utils.cluster_ready())
+
+        # Assume single unit no-min-cluster-size
+        mock_is_sufficient_peers.return_value = True
+        self.relation_ids.return_value = []
+        self.related_units.return_value = []
+        self.relation_get.return_value = None
+        _config = {'min-cluster-size': None}
+        self.config.side_effect = lambda key: _config.get(key)
+        mock_clustered.return_value = True
+        self.assertTrue(rabbit_utils.cluster_ready())
+
+    def test_client_node_is_ready(self):
+        # Paused
+        self.is_unit_paused_set.return_value = True
+        self.assertFalse(rabbit_utils.client_node_is_ready())
+
+        # Not ready
+        self.is_unit_paused_set.return_value = False
+        self.relation_ids.return_value = ['amqp:0']
+        self.leader_get.return_value = {}
+        self.assertFalse(rabbit_utils.client_node_is_ready())
+
+        # Ready
+        self.is_unit_paused_set.return_value = False
+        self.relation_ids.return_value = ['amqp:0']
+        self.leader_get.return_value = {'amqp:0_password': 'password'}
+        self.assertTrue(rabbit_utils.client_node_is_ready())
+
+    @mock.patch.object(rabbit_utils, 'cluster_ready')
+    @mock.patch.object(rabbit_utils, 'rabbitmq_is_installed')
+    def test_leader_node_is_ready(self, mock_rabbitmq_is_installed,
+                                  mock_cluster_ready):
+        # Paused
+        self.is_unit_paused_set.return_value = True
+        self.assertFalse(rabbit_utils.leader_node_is_ready())
+
+        # Not installed
+        self.is_unit_paused_set.return_value = False
+        mock_rabbitmq_is_installed.return_value = False
+        self.is_leader.return_value = True
+        mock_cluster_ready.return_value = True
+        self.assertFalse(rabbit_utils.leader_node_is_ready())
+
+        # Not leader
+        self.is_unit_paused_set.return_value = False
+        mock_rabbitmq_is_installed.return_value = True
+        self.is_leader.return_value = False
+        mock_cluster_ready.return_value = True
+        self.assertFalse(rabbit_utils.leader_node_is_ready())
+
+        # Not clustered
+        self.is_unit_paused_set.return_value = False
+        mock_rabbitmq_is_installed.return_value = True
+        self.is_leader.return_value = True
+        mock_cluster_ready.return_value = False
+        self.assertFalse(rabbit_utils.leader_node_is_ready())
+
+        # Leader ready
+        self.is_unit_paused_set.return_value = False
+        mock_rabbitmq_is_installed.return_value = True
+        self.is_leader.return_value = True
+        mock_cluster_ready.return_value = True
+        self.assertTrue(rabbit_utils.leader_node_is_ready())

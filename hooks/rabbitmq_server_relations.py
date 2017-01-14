@@ -135,11 +135,24 @@ def configure_amqp(username, vhost, admin=False):
     return password
 
 
+def update_clients():
+    """Update amqp client relation hooks
+
+    IFF leader node is ready. Client nodes are considered ready once the leader
+    has already run amqp_changed.
+    """
+    if rabbit.leader_node_is_ready() or rabbit.client_node_is_ready():
+        for rid in relation_ids('amqp'):
+            for unit in related_units(rid):
+                amqp_changed(relation_id=rid, remote_unit=unit)
+
+
 @hooks.hook('amqp-relation-changed')
 def amqp_changed(relation_id=None, remote_unit=None):
     host_addr = rabbit.get_unit_ip()
 
-    if not is_elected_leader('res_rabbitmq_vip'):
+    # TODO: Simplify what the non-leader needs to do
+    if not is_leader() and rabbit.client_node_is_ready():
         # NOTE(jamespage) clear relation to deal with data being
         #                 removed from peer storage
         relation_clear(relation_id)
@@ -155,7 +168,7 @@ def amqp_changed(relation_id=None, remote_unit=None):
                 relation_set(relation_id=rel_id, **peerdb_settings)
 
         log('amqp_changed(): Deferring amqp_changed'
-            ' to is_elected_leader.')
+            ' to the leader.')
 
         # NOTE: active/active case
         if config('prefer-ipv6'):
@@ -163,6 +176,10 @@ def amqp_changed(relation_id=None, remote_unit=None):
             relation_set(relation_id=relation_id,
                          relation_settings=relation_settings)
 
+        return
+
+    # Bail if not completely ready
+    if not rabbit.leader_node_is_ready():
         return
 
     relation_settings = {}
@@ -217,45 +234,6 @@ def amqp_changed(relation_id=None, remote_unit=None):
                        relation_settings=relation_settings)
 
 
-def is_sufficient_peers():
-    """If min-cluster-size has been provided, check that we have sufficient
-    number of peers to proceed with creating rabbitmq cluster.
-    """
-    min_size = config('min-cluster-size')
-    leader_election_available = True
-    try:
-        is_leader()
-    except NotImplementedError:
-        leader_election_available = False
-
-    if min_size:
-        # Use min-cluster-size if we don't have Juju leader election.
-        if not leader_election_available:
-            log("Waiting for minimum of %d peer units since there's no Juju "
-                "leader election" % (min_size))
-            size = 0
-            for rid in relation_ids('cluster'):
-                size = len(related_units(rid))
-
-            # Include this unit
-            size += 1
-            if size < min_size:
-                log("Insufficient number of peer units to form cluster "
-                    "(expected=%s, got=%s)" % (min_size, size), level=INFO)
-                return False
-            else:
-                return True
-        else:
-            log("Ignoring min-cluster-size in favour of Juju leader election")
-            return True
-    elif leader_election_available:
-        log("min-cluster-size is not defined, using juju leader-election.")
-    else:
-        log("min-cluster-size is not defined and juju leader election is not "
-            "available!", level="WARNING")
-    return True
-
-
 @hooks.hook('cluster-relation-joined')
 def cluster_joined(relation_id=None):
     relation_settings = {
@@ -286,10 +264,7 @@ def cluster_joined(relation_id=None):
             level=ERROR)
         return
 
-    if not is_sufficient_peers():
-        return
-
-    if is_elected_leader('res_rabbitmq_vip'):
+    if is_leader():
         log('Leader peer_storing cookie', level=INFO)
         cookie = open(rabbit.COOKIE_PATH, 'r').read().strip()
         peer_store('cookie', cookie)
@@ -298,9 +273,10 @@ def cluster_joined(relation_id=None):
 
 
 @hooks.hook('cluster-relation-changed')
-def cluster_changed():
+def cluster_changed(relation_id=None, remote_unit=None):
     # Future travelers beware ordering is significant
-    rdata = relation_get()
+    rdata = relation_get(rid=relation_id, unit=remote_unit)
+
     # sync passwords
     blacklist = ['hostname', 'private-address', 'public-address']
     whitelist = [a for a in rdata.keys() if a not in blacklist]
@@ -308,21 +284,15 @@ def cluster_changed():
 
     cookie = peer_retrieve('cookie')
     if not cookie:
-        log('cluster_joined: cookie not yet set.', level=INFO)
+        log('cluster_changed: cookie not yet set.', level=INFO)
         return
 
-    rdata = relation_get()
     if rdata:
         hostname = rdata.get('hostname', None)
         private_address = rdata.get('private-address', None)
 
         if hostname and private_address:
             rabbit.update_hosts_file({private_address: hostname})
-
-    if not is_sufficient_peers():
-        log('Not enough peers, waiting until leader is configured',
-            level=INFO)
-        return
 
     # sync the cookie with peers if necessary
     update_cookie()
@@ -334,20 +304,9 @@ def cluster_changed():
         return
 
     # cluster with node?
-    try:
-        if not is_leader():
-            rabbit.cluster_with()
-            update_nrpe_checks()
-    except NotImplementedError:
-        if is_newer():
-            rabbit.cluster_with()
-            update_nrpe_checks()
-
-    # If cluster has changed peer db may have changed so run amqp_changed
-    # to sync any changes
-    for rid in relation_ids('amqp'):
-        for unit in related_units(rid):
-            amqp_changed(relation_id=rid, remote_unit=unit)
+    if not is_leader():
+        rabbit.cluster_with()
+        update_nrpe_checks()
 
 
 def update_cookie(leaders_cookie=None):
@@ -465,10 +424,6 @@ def ha_changed():
     log('ha_changed(): We are now HA clustered. '
         'Advertising our VIP (%s) to all AMQP clients.' %
         vip)
-    # need to re-authenticate all clients since node-name changed.
-    for rid in relation_ids('amqp'):
-        for unit in related_units(rid):
-            amqp_changed(relation_id=rid, remote_unit=unit)
 
 
 @hooks.hook('ceph-relation-joined')
@@ -640,9 +595,14 @@ def config_changed():
         rabbit.disable_plugin(MAN_PLUGIN)
         close_port(55672)
 
-    rabbit.set_all_mirroring_queues(config('mirroring-queues'))
     rabbit.ConfigRenderer(
         rabbit.CONFIG_FILES).write_all()
+
+    # Only set values if this is the leader
+    if not is_leader():
+        return
+
+    rabbit.set_all_mirroring_queues(config('mirroring-queues'))
 
     if is_relation_made("ha"):
         ha_is_active_active = config("ha-vip-only")
@@ -658,12 +618,16 @@ def config_changed():
     else:
         update_nrpe_checks()
 
-    # NOTE(jamespage)
-    # trigger amqp_changed to pickup and changes to network
-    # configuration via the access-network config option.
-    for rid in relation_ids('amqp'):
+    # Update cluster in case min-cluster-size has changed
+    for rid in relation_ids('cluster'):
         for unit in related_units(rid):
-            amqp_changed(relation_id=rid, remote_unit=unit)
+            cluster_changed(relation_id=rid, remote_unit=unit)
+
+
+@hooks.hook('leader-elected')
+def leader_elected():
+    status_set("maintenance", "{} is the elected leader".format(local_unit()))
+
 
 @hooks.hook('leader-settings-changed')
 def leader_settings_changed():
@@ -681,12 +645,6 @@ def leader_settings_changed():
         # using LE and peerstorage
         for rid in relation_ids('cluster'):
             relation_set(relation_id=rid, relation_settings={'cookie': cookie})
-
-    # If leader has changed and access credentials, ripple these
-    # out from all units
-    for rid in relation_ids('amqp'):
-        for unit in related_units(rid):
-            amqp_changed(relation_id=rid, remote_unit=unit)
 
 
 def pre_install_hooks():
@@ -706,4 +664,6 @@ if __name__ == '__main__':
         hooks.execute(sys.argv)
     except UnregisteredHookError as e:
         log('Unknown hook {} - skipping.'.format(e))
+    # Gated client updates
+    update_clients()
     rabbit.assess_status(rabbit.ConfigRenderer(rabbit.CONFIG_FILES))

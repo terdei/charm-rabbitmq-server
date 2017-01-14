@@ -15,7 +15,7 @@
 import os
 import sys
 
-from testtools import TestCase
+from test_utils import CharmTestCase
 from mock import patch, MagicMock
 
 os.environ['JUJU_UNIT_NAME'] = 'UNIT_TEST/0'  # noqa - needed for import
@@ -31,12 +31,21 @@ with patch('charmhelpers.contrib.hardening.harden.harden') as mock_dec:
                             lambda *args, **kwargs: f(*args, **kwargs))
     import rabbitmq_server_relations
 
+TO_PATCH = [
+    # charmhelpers.core.hookenv
+    'is_leader',
+    'relation_ids',
+    'related_units',
+]
 
-class RelationUtil(TestCase):
+
+class RelationUtil(CharmTestCase):
     def setUp(self):
         self.fake_repo = {}
-        super(RelationUtil, self).setUp()
+        super(RelationUtil, self).setUp(rabbitmq_server_relations,
+                                        TO_PATCH)
 
+    @patch('rabbitmq_server_relations.rabbit.leader_node_is_ready')
     @patch('rabbitmq_server_relations.peer_store_and_set')
     @patch('rabbitmq_server_relations.config')
     @patch('rabbitmq_server_relations.relation_set')
@@ -56,7 +65,8 @@ class RelationUtil(TestCase):
             cmp_pkgrevno,
             relation_set,
             mock_config,
-            mock_peer_store_and_set):
+            mock_peer_store_and_set,
+            mock_leader_node_is_ready):
         """
         Compare version above and below 3.0.1.
         Make sure ha_queues is set correctly on each side.
@@ -68,6 +78,7 @@ class RelationUtil(TestCase):
 
             return None
 
+        mock_leader_node_is_ready.return_value = True
         mock_config.side_effect = config
         host_addr = "10.1.2.3"
         get_unit_ip.return_value = host_addr
@@ -90,6 +101,7 @@ class RelationUtil(TestCase):
                                'hostname': host_addr},
             relation_id=None)
 
+    @patch('rabbitmq_server_relations.rabbit.leader_node_is_ready')
     @patch('rabbitmq_server_relations.peer_store_and_set')
     @patch('rabbitmq_server_relations.config')
     @patch('rabbitmq_server_relations.relation_set')
@@ -109,7 +121,8 @@ class RelationUtil(TestCase):
             cmp_pkgrevno,
             relation_set,
             mock_config,
-            mock_peer_store_and_set):
+            mock_peer_store_and_set,
+            mock_leader_node_is_ready):
         """
         Compare version above and below 3.0.1.
         Make sure ha_queues is set correctly on each side.
@@ -121,6 +134,7 @@ class RelationUtil(TestCase):
 
             return None
 
+        mock_leader_node_is_ready.return_value = True
         mock_config.side_effect = config
         ipv6_addr = "2001:db8:1:0:f816:3eff:fed6:c140"
         get_unit_ip.return_value = ipv6_addr
@@ -143,40 +157,41 @@ class RelationUtil(TestCase):
                                'hostname': ipv6_addr},
             relation_id=None)
 
-    @patch.object(rabbitmq_server_relations, 'is_leader')
-    @patch.object(rabbitmq_server_relations, 'related_units')
-    @patch.object(rabbitmq_server_relations, 'relation_ids')
-    @patch.object(rabbitmq_server_relations, 'config')
-    def test_is_sufficient_peers(self, mock_config, mock_relation_ids,
-                                 mock_related_units, mock_is_leader):
-        # With leadership Election
-        mock_is_leader.return_value = False
-        _config = {'min-cluster-size': None}
-        mock_config.side_effect = lambda key: _config.get(key)
-        self.assertTrue(rabbitmq_server_relations.is_sufficient_peers())
+    @patch('rabbitmq_server_relations.amqp_changed')
+    @patch('rabbitmq_server_relations.rabbit.client_node_is_ready')
+    @patch('rabbitmq_server_relations.rabbit.leader_node_is_ready')
+    def test_update_clients(self, mock_leader_node_is_ready,
+                            mock_client_node_is_ready,
+                            mock_amqp_changed):
+        # Not ready
+        mock_client_node_is_ready.return_value = False
+        mock_leader_node_is_ready.return_value = False
+        rabbitmq_server_relations.update_clients()
+        self.assertFalse(mock_amqp_changed.called)
 
-        mock_is_leader.return_value = False
-        mock_relation_ids.return_value = ['cluster:0']
-        mock_related_units.return_value = ['test/0']
-        _config = {'min-cluster-size': 3}
-        self.assertTrue(rabbitmq_server_relations.is_sufficient_peers())
+        # Leader Ready
+        self.relation_ids.return_value = ['amqp:0']
+        self.related_units.return_value = ['client/0']
+        mock_leader_node_is_ready.return_value = True
+        mock_client_node_is_ready.return_value = False
+        rabbitmq_server_relations.update_clients()
+        mock_amqp_changed.assert_called_with(relation_id='amqp:0',
+                                             remote_unit='client/0')
 
-        mock_is_leader.return_value = False
-        mock_related_units.return_value = ['test/0', 'test/1']
-        self.assertTrue(rabbitmq_server_relations.is_sufficient_peers())
+        # Client Ready
+        self.relation_ids.return_value = ['amqp:0']
+        self.related_units.return_value = ['client/0']
+        mock_leader_node_is_ready.return_value = False
+        mock_client_node_is_ready.return_value = True
+        rabbitmq_server_relations.update_clients()
+        mock_amqp_changed.assert_called_with(relation_id='amqp:0',
+                                             remote_unit='client/0')
 
-        # Without leadership Election
-        mock_is_leader.side_effect = NotImplementedError
-        _config = {'min-cluster-size': None}
-        mock_config.side_effect = lambda key: _config.get(key)
-        self.assertTrue(rabbitmq_server_relations.is_sufficient_peers())
-
-        mock_is_leader.side_effect = NotImplementedError
-        mock_relation_ids.return_value = ['cluster:0']
-        mock_related_units.return_value = ['test/0']
-        _config = {'min-cluster-size': 3}
-        self.assertFalse(rabbitmq_server_relations.is_sufficient_peers())
-
-        mock_is_leader.side_effect = NotImplementedError
-        mock_related_units.return_value = ['test/0', 'test/1']
-        self.assertTrue(rabbitmq_server_relations.is_sufficient_peers())
+        # Both Ready
+        self.relation_ids.return_value = ['amqp:0']
+        self.related_units.return_value = ['client/0']
+        mock_leader_node_is_ready.return_value = True
+        mock_client_node_is_ready.return_value = True
+        rabbitmq_server_relations.update_clients()
+        mock_amqp_changed.assert_called_with(relation_id='amqp:0',
+                                             remote_unit='client/0')
