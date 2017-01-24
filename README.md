@@ -51,7 +51,7 @@ The source option can be used in a few different ways:
     source="ppa:james-page/testing" - use the testing PPA owned by james-page
     source="http://myrepo/ubuntu main" - use the repository located at the provided URL
 
-The charm also supports use of arbitary archive key's for use with private repositories:
+The charm also supports use of arbitrary archive key's for use with private repositories:
 
     juju set rabbitmq-server key="C6CEA0C9"
 
