@@ -94,6 +94,10 @@ ENABLED_PLUGINS = '/etc/rabbitmq/enabled_plugins'
 RABBIT_USER = 'rabbitmq'
 LIB_PATH = '/var/lib/rabbitmq/'
 HOSTS_FILE = '/etc/hosts'
+AMQP_OVERRIDE_CONFIG = 'access-network'
+CLUSTER_OVERRIDE_CONFIG = 'cluster-network'
+AMQP_INTERFACE = 'amqp'
+CLUSTER_INTERFACE = 'cluster'
 
 _named_passwd = '/var/lib/charm/{}/{}.passwd'
 _local_named_passwd = '/var/lib/charm/{}/{}.local_passwd'
@@ -715,13 +719,6 @@ def get_node_hostname(ip_addr):
     return nodename
 
 
-def get_local_nodename():
-    '''Resolve local nodename into something that's universally addressable'''
-    ip_addr = get_host_ip(unit_get('private-address'))
-    log('getting local nodename for ip address: %s' % ip_addr, level=INFO)
-    return get_node_hostname(ip_addr)
-
-
 @cached
 def clustered():
     ''' Determine whether local rabbitmq-server is clustered '''
@@ -879,11 +876,15 @@ def _pause_resume_helper(f, configs):
       ports=None)
 
 
-def get_unit_ip(amqp_relation=False):
+def get_unit_ip(config_override=AMQP_OVERRIDE_CONFIG,
+                interface=AMQP_INTERFACE):
     """Return this unit's IP.
     Future proof to allow for network spaces or other more complex addresss
     selection.
 
+    @param config_override: string name of the config option for network
+           override. Default to amqp-network
+    @param interface: string name of the relation. Default to amqp.
     @raises Exception if prefer-ipv6 is configured but IPv6 unsupported.
     @returns IPv6 or IPv4 address
     """
@@ -892,25 +893,22 @@ def get_unit_ip(amqp_relation=False):
     if config('prefer-ipv6'):
         assert_charm_supports_ipv6()
         return get_ipv6_addr()[0]
-    elif amqp_relation:
-        if config('access-network'):
-            # NOTE(jamespage)
-            # override private-address settings if access-network is
-            # configured and an appropriate network interface is
-            # configured.
-            return get_address_in_network(config('access-network'),
-                                          fallback)
-        else:
-            # NOTE(jamespage)
-            # Try using network spaces if access-network is not
-            # configured, fallback to private address if not
-            # supported
-            try:
-                return network_get_primary_address('amqp')
-            except NotImplementedError:
-                return fallback
+    elif config(config_override):
+        # NOTE(jamespage)
+        # override private-address settings if access-network is
+        # configured and an appropriate network interface is
+        # configured.
+        return get_address_in_network(config(config_override),
+                                      fallback)
     else:
-        return fallback
+        # NOTE(jamespage)
+        # Try using network spaces if access-network is not
+        # configured, fallback to private address if not
+        # supported
+        try:
+            return network_get_primary_address(interface)
+        except NotImplementedError:
+            return fallback
 
 
 def get_unit_hostname():

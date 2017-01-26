@@ -213,7 +213,7 @@ def amqp_changed(relation_id=None, remote_unit=None):
 
     relation_settings['hostname'] = \
         relation_settings['private-address'] = \
-        rabbit.get_unit_ip(amqp_relation=True)
+        rabbit.get_unit_ip()
 
     ssl_utils.configure_client_ssl(relation_settings)
 
@@ -238,7 +238,9 @@ def amqp_changed(relation_id=None, remote_unit=None):
 def cluster_joined(relation_id=None):
     relation_settings = {
         'hostname': rabbit.get_unit_hostname(),
-        'private-address': rabbit.get_unit_ip(),
+        'private-address':
+            rabbit.get_unit_ip(config_override=rabbit.CLUSTER_OVERRIDE_CONFIG,
+                               interface=rabbit.CLUSTER_INTERFACE),
     }
 
     relation_set(relation_id=relation_id,
@@ -568,8 +570,10 @@ MAN_PLUGIN = 'rabbitmq_management'
 def config_changed():
 
     # Update hosts with this unit's information
-    rabbit.update_hosts_file({rabbit.get_unit_ip():
-                              rabbit.get_unit_hostname()})
+    rabbit.update_hosts_file(
+        {rabbit.get_unit_ip(config_override=rabbit.CLUSTER_OVERRIDE_CONFIG,
+                            interface=rabbit.CLUSTER_INTERFACE):
+                                rabbit.get_unit_hostname()})
 
     # Add archive source if provided
     add_source(config('source'), config('key'))
