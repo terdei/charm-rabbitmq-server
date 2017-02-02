@@ -137,7 +137,7 @@ def configure_amqp(username, vhost, admin=False):
 
 @hooks.hook('amqp-relation-changed')
 def amqp_changed(relation_id=None, remote_unit=None):
-    host_addr = rabbit.get_unit_ip()
+    host_addr = rabbit.get_unit_ip(amqp_relation=True)
 
     if not is_elected_leader('res_rabbitmq_vip'):
         # NOTE(jamespage) clear relation to deal with data being
