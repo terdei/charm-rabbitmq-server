@@ -594,9 +594,13 @@ def config_changed():
 
     if config('management_plugin') is True:
         rabbit.enable_plugin(MAN_PLUGIN)
-        open_port(55672)
+        open_port(rabbit.get_managment_port())
     else:
         rabbit.disable_plugin(MAN_PLUGIN)
+        close_port(rabbit.get_managment_port())
+        # LY: Close the old managment port since it may have been opened in a
+        #     previous version of the charm. close_port is a noop if the port
+        #     is not open
         close_port(55672)
 
     rabbit.ConfigRenderer(

@@ -506,6 +506,13 @@ def disable_plugin(plugin):
     _manage_plugin(plugin, 'disable')
 
 
+def get_managment_port():
+    if get_upstream_version(VERSION_PACKAGE) >= '3':
+        return 15672
+    else:
+        return 55672
+
+
 def execute(cmd, die=False, echo=False):
     """ Executes a command
 

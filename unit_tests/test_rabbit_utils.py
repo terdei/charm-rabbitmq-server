@@ -571,3 +571,13 @@ class UtilsTests(CharmTestCase):
         self.network_get_primary_address.return_value = AMQP_IP
         self.network_get_primary_address.side_effect = NotImplementedError
         self.assertEqual(DEFAULT_IP, rabbit_utils.get_unit_ip())
+
+    @mock.patch.object(rabbit_utils, 'get_upstream_version')
+    def test_get_managment_port_legacy(self, mock_get_upstream_version):
+        mock_get_upstream_version.return_value = '2.7.1'
+        self.assertEqual(rabbit_utils.get_managment_port(), 55672)
+
+    @mock.patch.object(rabbit_utils, 'get_upstream_version')
+    def test_get_managment_port(self, mock_get_upstream_version):
+        mock_get_upstream_version.return_value = '3.5.7'
+        self.assertEqual(rabbit_utils.get_managment_port(), 15672)
