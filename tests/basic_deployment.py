@@ -86,7 +86,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         }
         other_services = [
             {'name': 'cinder'},
-            {'name': 'percona-cluster', 'constraints': {'mem': '3072M'}},
+            {'name': 'percona-cluster'},
             {'name': 'keystone'},
             {'name': 'nrpe'}
         ]
@@ -119,10 +119,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         }
 
         pxc_config = {
-            'dataset-size': '25%',
             'max-connections': 1000,
-            'root-password': 'ChangeMe123',
-            'sst-password': 'ChangeMe123',
         }
 
         keystone_config = {
@@ -295,10 +292,15 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
             self.rmq0_sentry: ['rabbitmq-server'],
             self.rmq1_sentry: ['rabbitmq-server'],
             self.rmq2_sentry: ['rabbitmq-server'],
-            self.cinder_sentry: ['cinder-api',
-                                 'cinder-scheduler',
+            self.cinder_sentry: ['cinder-scheduler',
                                  'cinder-volume'],
         }
+
+        if self._get_openstack_release_string() >= 'ocata':
+            services[self.cinder_sentry].append('apache2')
+        else:
+            services[self.cinder_sentry].append('cinder-api')
+
         ret = u.validate_services_by_name(services)
         if ret:
             amulet.raise_status(amulet.FAIL, msg=ret)
