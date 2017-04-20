@@ -265,9 +265,10 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         u.log.debug('Checking system services on units...')
 
         # Beam and epmd sometimes briefly have more than one PID,
+        # Process is named 'beam' with 1 cpu; 'beam.smp' for >1 cpu.
         # True checks for at least 1.
         rmq_processes = {
-            'beam': True,
+            'beam.smp': True,
             'epmd': True,
         }
 
@@ -601,6 +602,48 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         u.rmq_wait_for_cluster(self)
 
         u.log.info('OK\n')
+
+    def test_901_remove_unit(self):
+        """Test if a unit correctly cleans up by removing itself from the
+           RabbitMQ cluster on removal"""
+        u.log.debug('Checking that units correctly clean up after themselves '
+                    'on unit removal...')
+        configs = {'rabbitmq-server': {'min-cluster-size': '2'}}
+        super(RmqBasicDeployment, self)._configure_services(configs)
+        self.d.sentry.wait(timeout=900)
+        u.rmq_wait_for_cluster(self)
+
+        self.d.remove_unit(self.rmq2_sentry.info['unit_name'])
+        self.d.sentry.wait(timeout=900)
+        u.rmq_wait_for_cluster(self)
+
+        sentry_units = self._get_rmq_sentry_units()[:-1]
+        unit_host_names = u.get_unit_hostnames(sentry_units)
+        unit_node_names = []
+        for unit in unit_host_names:
+            unit_node_names.append('rabbit@{}'.format(unit_host_names[unit]))
+        errors = []
+
+        for sentry in sentry_units:
+            unit_name = sentry.info['unit_name']
+            nodes = []
+            str_stat = u.get_rmq_cluster_status(sentry)
+            # make the interesting part of rabbitmqctl cluster_status output
+            # json-parseable.
+            if 'nodes,[{disc,' in str_stat:
+                pos_start = str_stat.find('nodes,[{disc,') + 13
+                pos_end = str_stat.find(']}]},', pos_start) + 1
+                str_nodes = str_stat[pos_start:pos_end].replace("'", '"')
+                nodes = json.loads(str_nodes)
+            for node in nodes:
+                if node not in unit_node_names:
+                    errors.append('Cluster registration check failed on {}: '
+                                  '{} should not be registered with RabbitMQ '
+                                  'after unit removal.\n'
+                                  ''.format(unit_name, node))
+        if errors:
+            amulet.raise_status(amulet.FAIL, msg=errors)
+        u.log.debug('OK')
 
     def test_910_pause_and_resume(self):
         """The services can be paused and resumed. """
