@@ -267,7 +267,7 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         # Beam and epmd sometimes briefly have more than one PID,
         # True checks for at least 1.
         rmq_processes = {
-            'beam': True,
+            'beam.smp': True,
             'epmd': True,
         }
 
