@@ -311,6 +311,32 @@ def cluster_changed(relation_id=None, remote_unit=None):
         update_nrpe_checks()
 
 
+@hooks.hook('stop')
+def stop():
+    """Gracefully remove ourself from RabbitMQ cluster before unit is removed
+
+    If RabbitMQ have objections to node removal, for example because of this
+    being the only disc node to leave the cluster, the operation will fail and
+    unit removal will be blocked with error for operator to investigate.
+
+    In the event of a unit being forcefully or abrubtly removed from the
+    cluster without a chance to remove itself, it will be left behind as a
+    stopped node in the RabbitMQ cluster.  Having a dormant no longer existing
+    stopped node lying around will cause trouble in the event that all RabbitMQ
+    nodes are shut down.  In such a situation the cluster most likely will not
+    start again without operator intervention as RabbitMQ will want to
+    interrogate the now non-existing stopped node about any queue it thinks it
+    would be most likely to have authoritative knowledge about.
+
+    For this reason any abruptly removed nodes will be cleaned up periodically
+    by the leader unit during its update-status hook run.
+
+    This call is placed in stop hook and not in the cluster-relation-departed
+    hook because the latter is not called on the unit being removed.
+    """
+    rabbit.leave_cluster()
+
+
 def update_cookie(leaders_cookie=None):
     # sync cookie
     if leaders_cookie:
@@ -666,6 +692,21 @@ def pre_install_hooks():
 def update_status():
     log('Updating status.')
 
+    # leader check for previously unsuccessful cluster departures
+    #
+    # This must be done here and not in the cluster-relation-departed hook.  At
+    # the point in time the cluster-relation-departed hook is called we know
+    # that a unit is departing.  We also know that RabbitMQ will not have
+    # noticed its departure yet.  We cannot remove a node pre-emptively.
+    #
+    # In the normal case the departing node should remove itself from the
+    # cluster in its stop hook.  We clean up the ones that for whatever reason
+    # are unable to clean up after themselves successfully here.
+    #
+    # Have a look at the docstring of the stop() function for detailed
+    # explanation.
+    if is_leader():
+        rabbit.check_cluster_memberships()
 
 if __name__ == '__main__':
     try:

@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
 import mock
 import os
-import tempfile
+import subprocess
 import sys
-import collections
+import tempfile
+
 from functools import wraps
 
 from test_utils import CharmTestCase
@@ -85,10 +87,13 @@ class ConfigRendererTests(CharmTestCase):
 
 
 RABBITMQCTL_CLUSTERSTATUS_RUNNING = """Cluster status of node 'rabbit@juju-devel3-machine-19' ...
-[{nodes,[{disc,['rabbit@juju-devel3-machine-14',
-                'rabbit@juju-devel3-machine-19']}]},
- {running_nodes,['rabbit@juju-devel3-machine-14',
-                 'rabbit@juju-devel3-machine-19']},
+[{nodes,
+    [{disc,
+        ['rabbit@juju-devel3-machine-14','rabbit@juju-devel3-machine-19']},
+     {ram,
+        ['rabbit@juju-devel3-machine-42']}]},
+ {running_nodes,
+    ['rabbit@juju-devel3-machine-14','rabbit@juju-devel3-machine-19']},
  {cluster_name,<<"rabbit@juju-devel3-machine-14.openstacklocal">>},
  {partitions,[]}]
  """
@@ -176,6 +181,16 @@ class UtilsTests(CharmTestCase):
         self.assertTrue(rabbit_utils.clustered())
 
     @mock.patch('rabbit_utils.subprocess')
+    def test_nodes(self, mock_subprocess):
+        '''Ensure cluster_status can be parsed for a clustered deployment'''
+        mock_subprocess.check_output.return_value = \
+            RABBITMQCTL_CLUSTERSTATUS_RUNNING
+        self.assertEqual(rabbit_utils.nodes(),
+                         ['rabbit@juju-devel3-machine-14',
+                          'rabbit@juju-devel3-machine-19',
+                          'rabbit@juju-devel3-machine-42'])
+
+    @mock.patch('rabbit_utils.subprocess')
     def test_running_nodes(self, mock_subprocess):
         '''Ensure cluster_status can be parsed for a clustered deployment'''
         mock_subprocess.check_output.return_value = \
@@ -183,6 +198,14 @@ class UtilsTests(CharmTestCase):
         self.assertEqual(rabbit_utils.running_nodes(),
                          ['rabbit@juju-devel3-machine-14',
                           'rabbit@juju-devel3-machine-19'])
+
+    @mock.patch('rabbit_utils.subprocess')
+    def test_nodes_solo(self, mock_subprocess):
+        '''Ensure cluster_status can be parsed for a single unit deployment'''
+        mock_subprocess.check_output.return_value = \
+            RABBITMQCTL_CLUSTERSTATUS_SOLO
+        self.assertEqual(rabbit_utils.nodes(),
+                         ['rabbit@juju-devel3-machine-14'])
 
     @mock.patch('rabbit_utils.subprocess')
     def test_running_nodes_solo(self, mock_subprocess):
@@ -581,3 +604,56 @@ class UtilsTests(CharmTestCase):
     def test_get_managment_port(self, mock_get_upstream_version):
         mock_get_upstream_version.return_value = '3.5.7'
         self.assertEqual(rabbit_utils.get_managment_port(), 15672)
+
+    @mock.patch('rabbit_utils.rabbitmqctl')
+    @mock.patch('rabbit_utils.cmp_pkgrevno')
+    def test_forget_cluster_node_old_rabbitmq(self, mock_cmp_pkgrevno,
+                                              mock_rabbitmqctl):
+        mock_cmp_pkgrevno.return_value = -1
+        rabbit_utils.forget_cluster_node('a')
+        self.assertFalse(mock_rabbitmqctl.called)
+
+    @mock.patch('rabbit_utils.log')
+    @mock.patch('subprocess.check_call')
+    @mock.patch('rabbit_utils.cmp_pkgrevno')
+    def test_forget_cluster_node_subprocess_fails(self, mock_cmp_pkgrevno,
+                                                  mock_check_call,
+                                                  mock_log):
+        mock_cmp_pkgrevno.return_value = 0
+
+        def raise_error(x):
+            raise subprocess.CalledProcessError(2, x)
+        mock_check_call.side_effect = raise_error
+
+        rabbit_utils.forget_cluster_node('a')
+        mock_log.assert_called_with("Unable to remove node 'a' from cluster. "
+                                    "It is either still running or already "
+                                    "removed. (Output: 'None')", level='ERROR')
+
+    @mock.patch('rabbit_utils.rabbitmqctl')
+    @mock.patch('rabbit_utils.cmp_pkgrevno')
+    def test_forget_cluster_node(self, mock_cmp_pkgrevno, mock_rabbitmqctl):
+        mock_cmp_pkgrevno.return_value = 1
+        rabbit_utils.forget_cluster_node('a')
+        mock_rabbitmqctl.assert_called_with('forget_cluster_node', 'a')
+
+    @mock.patch('rabbit_utils.forget_cluster_node')
+    @mock.patch('rabbit_utils.relations_for_id')
+    @mock.patch('rabbit_utils.subprocess')
+    @mock.patch('rabbit_utils.relation_ids')
+    def test_check_cluster_memberships(self, mock_relation_ids,
+                                       mock_subprocess,
+                                       mock_relations_for_id,
+                                       mock_forget_cluster_node):
+        mock_relation_ids.return_value = [0]
+        mock_subprocess.check_output.return_value = \
+            RABBITMQCTL_CLUSTERSTATUS_RUNNING
+        mock_relations_for_id.return_value = [
+            {'clustered': 'juju-devel3-machine-14'},
+            {'clustered': 'juju-devel3-machine-19'},
+            {'dummy-entry': 'to validate behaviour on relations without '
+                            'clustered key in dict'},
+        ]
+        rabbit_utils.check_cluster_memberships()
+        mock_forget_cluster_node.assert_called_with(
+            'rabbit@juju-devel3-machine-42')

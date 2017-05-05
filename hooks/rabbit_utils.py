@@ -47,6 +47,7 @@ from charmhelpers.contrib.network.ip import (
 from charmhelpers.core.hookenv import (
     relation_ids,
     related_units,
+    relations_for_id,
     log, ERROR,
     WARNING,
     INFO, DEBUG,
@@ -333,7 +334,8 @@ def set_all_mirroring_queues(enable):
 def rabbitmqctl(action, *args):
     ''' Run rabbitmqctl with action and args. This function uses
         subprocess.check_call. For uses that need check_output
-        use a direct subproecess call
+        use a direct subprocess call or rabbitmqctl_normalized_output
+        function.
      '''
     cmd = []
     # wait will run for ever. Timeout in a reasonable amount of time
@@ -344,6 +346,25 @@ def rabbitmqctl(action, *args):
         cmd.append(arg)
     log("Running {}".format(cmd), 'DEBUG')
     subprocess.check_call(cmd)
+
+
+def rabbitmqctl_normalized_output(*args):
+    ''' Run rabbitmqctl with args. Normalize output by removing
+        whitespace and return it to caller for further processing.
+    '''
+    cmd = [RABBITMQ_CTL]
+    cmd.extend(args)
+    out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+
+    # Output is in Erlang External Term Format (ETF).  The amount of whitespace
+    # (including newlines in the middle of data structures) in the output
+    # depends on the data presented.  ETF resembles JSON, but it is not.
+    # Writing our own parser is a bit out of scope, enabling management-plugin
+    # to use REST interface might be overkill at this stage.
+    #
+    # Removing whitespace will let our simple pattern matching work and is a
+    # compromise.
+    return out.translate(None, ' \t\n')
 
 
 def wait_app():
@@ -431,15 +452,52 @@ def cluster_with():
     return False
 
 
-def break_cluster():
+def check_cluster_memberships():
+    ''' Iterate over RabbitMQ node list, compare it to charm cluster
+        relationships, and forget about any nodes previously abruptly removed
+        from the cluster '''
+    for rid in relation_ids('cluster'):
+        for node in nodes():
+            if not any(rel.get('clustered', None) == node.split('@')[1]
+                       for rel in relations_for_id(relid=rid)) and \
+                    node not in running_nodes():
+                log("check_cluster_memberships(): '{}' in nodes but not in "
+                    "charm relations or running_nodes, telling RabbitMQ to "
+                    "forget about it.".format(node), level=DEBUG)
+                forget_cluster_node(node)
+
+
+def forget_cluster_node(node):
+    ''' Remove previously departed node from cluster '''
+    if cmp_pkgrevno('rabbitmq-server', '3.0.0') < 0:
+        log('rabbitmq-server version < 3.0.0, '
+            'forget_cluster_node not supported.', level=DEBUG)
+        return
+    try:
+        rabbitmqctl('forget_cluster_node', node)
+    except subprocess.CalledProcessError, e:
+        if e.returncode == 2:
+            log("Unable to remove node '{}' from cluster. It is either still "
+                "running or already removed. (Output: '{}')"
+                "".format(node, e.output), level=ERROR)
+            return
+        else:
+            raise
+    log("Removed previously departed node from cluster: '{}'."
+        "".format(node), level=INFO)
+
+
+def leave_cluster():
+    ''' Leave cluster gracefully '''
     try:
         rabbitmqctl('stop_app')
         rabbitmqctl('reset')
         start_app()
-        log('Cluster successfully broken.')
+        log('Successfully left cluster gracefully.')
     except:
         # error, no nodes available for clustering
-        log('Error breaking rabbit cluster', level=ERROR)
+        log('Cannot leave cluster, we might be the last disc-node in the '
+            'cluster.', level=ERROR)
         raise
 
 
@@ -682,17 +740,26 @@ def services():
 
 
 @cached
+def nodes(get_running=False):
+    ''' Get list of nodes registered in the RabbitMQ cluster '''
+    out = rabbitmqctl_normalized_output('cluster_status')
+    cluster_status = {}
+    for m in re.finditer("{([^,]+),(?!\[{)\[([^\]]*)", out):
+        state = m.group(1)
+        items = m.group(2).split(',')
+        items = [x.replace("'", '').strip() for x in items]
+        cluster_status.update({state: items})
+
+    if get_running:
+        return cluster_status.get('running_nodes', [])
+
+    return cluster_status.get('disc', []) + cluster_status.get('ram', [])
+
+
+@cached
 def running_nodes():
-    ''' Determine the current set of running rabbitmq-units in the cluster '''
-    out = subprocess.check_output([RABBITMQ_CTL, 'cluster_status'])
-
-    running_nodes = []
-    m = re.search("\{running_nodes,\[(.*?)\]\}", out.strip(), re.DOTALL)
-    if m is not None:
-        running_nodes = m.group(1).split(',')
-        running_nodes = [x.replace("'", '').strip() for x in running_nodes]
-
-    return running_nodes
+    ''' Determine the current set of running nodes in the RabbitMQ cluster '''
+    return nodes(get_running=True)
 
 
 @cached
