@@ -20,10 +20,6 @@ sync: bin/charm_helpers_sync.py
 	@$(PYTHON) bin/charm_helpers_sync.py -c charm-helpers-hooks.yaml
 	@$(PYTHON) bin/charm_helpers_sync.py -c charm-helpers-tests.yaml
 
-publish: lint test
-	bzr push lp:charms/rabbitmq-server
-	bzr push lp:charms/trusty/rabbitmq-server
-
 test:
 	@echo Starting unit tests...
 	@tox -e py27

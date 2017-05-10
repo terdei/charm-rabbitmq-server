@@ -40,8 +40,12 @@ from charmhelpers.contrib.openstack.amulet.utils import (
     DEBUG,
     # ERROR
 )
+from charmhelpers.contrib.openstack.utils import CompareOpenStackReleases
 
-from charmhelpers.core.host import lsb_release
+from charmhelpers.core.host import (
+    lsb_release,
+    CompareHostReleases,
+)
 
 # Use DEBUG to turn on debug logging
 u = OpenStackAmuletUtils(DEBUG)
@@ -297,7 +301,8 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
                                  'cinder-volume'],
         }
 
-        if self._get_openstack_release_string() >= 'ocata':
+        _release = self._get_openstack_release_string()
+        if CompareOpenStackReleases(_release) >= 'ocata':
             services[self.cinder_sentry].append('apache2')
         else:
             services[self.cinder_sentry].append('cinder-api')
@@ -450,7 +455,8 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         """Send amqp messages with ssl enabled, to every rmq unit and
         check every rmq unit for messages.  Standard ssl tcp port."""
         # http://pad.lv/1625044
-        if self.client_series >= 'xenial' and self.series <= 'trusty':
+        if (CompareHostReleases(self.client_series) >= 'xenial' and
+                CompareHostReleases(self.series) <= 'trusty'):
             u.log.info('SKIP')
             u.log.info('Skipping SSL tests due to client'
                        ' compatibility issues')
@@ -467,7 +473,8 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
         """Send amqp messages with ssl on, to every rmq unit and check
         every rmq unit for messages.  Custom ssl tcp port."""
         # http://pad.lv/1625044
-        if self.client_series >= 'xenial' and self.series <= 'trusty':
+        if (CompareHostReleases(self.client_series) >= 'xenial' and
+                CompareHostReleases(self.series) <= 'trusty'):
             u.log.info('SKIP')
             u.log.info('Skipping SSL tests due to client'
                        ' compatibility issues')

@@ -72,6 +72,7 @@ from charmhelpers.core.host import (
     cmp_pkgrevno,
     path_hash,
     service as system_service,
+    CompareHostReleases,
 )
 
 from charmhelpers.contrib.peerstorage import (
@@ -709,7 +710,8 @@ def update_hosts_file(map):
 
 def assert_charm_supports_ipv6():
     """Check whether we are able to support charms ipv6."""
-    if lsb_release()['DISTRIB_CODENAME'].lower() < "trusty":
+    _release = lsb_release()['DISTRIB_CODENAME'].lower()
+    if CompareHostReleases(_release) < "trusty":
         raise Exception("IPv6 is not supported in the charms for Ubuntu "
                         "versions less than Trusty 14.04")
 
