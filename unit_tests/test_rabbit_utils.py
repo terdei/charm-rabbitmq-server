@@ -230,6 +230,9 @@ class UtilsTests(CharmTestCase):
                                               'rabbit@juju-devel7-machine-11'],
                                              stderr=-2)
 
+    @mock.patch('rabbit_utils.relation_get')
+    @mock.patch('rabbit_utils.relation_id')
+    @mock.patch('rabbit_utils.peer_retrieve')
     @mock.patch('rabbit_utils.subprocess.check_call')
     @mock.patch('rabbit_utils.subprocess.check_output')
     @mock.patch('rabbit_utils.time')
@@ -240,11 +243,14 @@ class UtilsTests(CharmTestCase):
     def test_cluster_with_clustered(self, mock_cmp_pkgrevno, mock_clustered,
                                     mock_leader_node, mock_running_nodes,
                                     mock_time, mock_check_output,
-                                    mock_check_call):
+                                    mock_check_call, mock_peer_retrieve,
+                                    mock_relation_id, mock_relation_get):
         mock_clustered.return_value = True
+        mock_peer_retrieve.return_value = 'juju-devel7-machine-11'
         mock_leader_node.return_value = 'rabbit@juju-devel7-machine-11'
         mock_running_nodes.return_value = ['rabbit@juju-devel5-machine-19',
                                            'rabbit@juju-devel7-machine-11']
+        mock_relation_id.return_value = 'cluster:1'
         rabbit_utils.cluster_with()
         self.assertEqual(0, mock_check_output.call_count)
 
@@ -265,6 +271,32 @@ class UtilsTests(CharmTestCase):
         mock_running_nodes.return_value = ['rabbit@juju-devel5-machine-19']
         rabbit_utils.cluster_with()
         self.assertEqual(0, mock_check_output.call_count)
+
+    @mock.patch('time.time')
+    @mock.patch('rabbit_utils.relation_set')
+    @mock.patch('rabbit_utils.get_unit_hostname')
+    @mock.patch('rabbit_utils.relation_get')
+    @mock.patch('rabbit_utils.relation_id')
+    @mock.patch('rabbit_utils.running_nodes')
+    @mock.patch('rabbit_utils.peer_retrieve')
+    def test_cluster_with_single_node(self, mock_peer_retrieve,
+                                      mock_running_nodes, mock_relation_id,
+                                      mock_relation_get,
+                                      mock_get_unit_hostname,
+                                      mock_relation_set, mock_time):
+
+        mock_peer_retrieve.return_value = 'localhost'
+        mock_running_nodes.return_value = ['rabbit@localhost']
+        mock_relation_id.return_value = 'cluster:1'
+        mock_relation_get.return_value = False
+        mock_get_unit_hostname.return_value = 'localhost'
+        mock_time.return_value = 1234.1
+
+        self.assertFalse(rabbit_utils.cluster_with())
+
+        mock_relation_set.assert_called_with(relation_id='cluster:1',
+                                             clustered='localhost',
+                                             timestamp=1234.1)
 
     @mock.patch('rabbit_utils.application_version_set')
     @mock.patch('rabbit_utils.get_upstream_version')

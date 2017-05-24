@@ -45,6 +45,7 @@ from charmhelpers.contrib.network.ip import (
 )
 
 from charmhelpers.core.hookenv import (
+    relation_id,
     relation_ids,
     related_units,
     log, ERROR,
@@ -61,6 +62,7 @@ from charmhelpers.core.hookenv import (
     network_get_primary_address,
     is_leader,
     leader_get,
+    local_unit,
 )
 
 from charmhelpers.core.host import (
@@ -396,15 +398,24 @@ def join_cluster(node):
 def cluster_with():
     log('Clustering with new node')
 
-    if clustered():
-        log('Node is already clustered, skipping')
-        return False
-
     # check the leader and try to cluster with it
     node = leader_node()
     if node:
         if node in running_nodes():
             log('Host already clustered with %s.' % node)
+
+            cluster_rid = relation_id('cluster', local_unit())
+            is_clustered = relation_get(attribute='clustered', rid=cluster_rid)
+
+            log('am I clustered?: %s' % bool(is_clustered), level=DEBUG)
+            if not is_clustered:
+                # NOTE(freyes): this node needs to be marked as clustered, it's
+                # part of the cluster according to 'rabbitmqctl cluster_status'
+                # (LP: #1691510)
+                relation_set(relation_id=cluster_rid,
+                             clustered=get_unit_hostname(),
+                             timestamp=time.time())
+
             return False
         # NOTE: The primary problem rabbitmq has clustering is when
         # more than one node attempts to cluster at the same time.
@@ -983,8 +994,8 @@ def cluster_ready():
     """
     min_size = config('min-cluster-size')
     units = 1
-    for relation_id in relation_ids('cluster'):
-        units += len(related_units(relation_id))
+    for rid in relation_ids('cluster'):
+        units += len(related_units(rid))
     if not min_size:
         min_size = units
 
@@ -994,10 +1005,10 @@ def cluster_ready():
         if not clustered():
             return False
         clustered_units = 1
-        for relation_id in relation_ids('cluster'):
-            for remote_unit in related_units(relation_id):
+        for rid in relation_ids('cluster'):
+            for remote_unit in related_units(rid):
                 if not relation_get(attribute='clustered',
-                                    rid=relation_id,
+                                    rid=rid,
                                     unit=remote_unit):
                     log("{} is not yet clustered".format(remote_unit),
                         DEBUG)
