@@ -305,9 +305,10 @@ def cluster_changed(relation_id=None, remote_unit=None):
             'rabbitmq cluster config.', level=INFO)
         return
 
-    # cluster with node?
+    # NOTE(freyes): all the nodes need to marked as 'clustered' (LP: #1691510)
+    rabbit.cluster_with()
+
     if not is_leader():
-        rabbit.cluster_with()
         update_nrpe_checks()
 
 
@@ -585,6 +586,10 @@ def upgrade_charm():
     if os.path.isfile(old):
         new = os.path.join('var/lib/rabbitmq', 'nagios.passwd')
         shutil.move(old, new)
+
+    # NOTE(freyes): cluster_with() will take care of marking the node as
+    # 'clustered' for existing deployments (LP: #1691510).
+    rabbit.cluster_with()
 
 
 MAN_PLUGIN = 'rabbitmq_management'

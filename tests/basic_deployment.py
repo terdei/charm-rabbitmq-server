@@ -313,6 +313,28 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
 
         u.log.info('OK\n')
 
+    def test_103_clustered_attribute(self):
+        """Verify the 'clustered' attribute was set in the 'cluster' relation
+        for all the units"""
+
+        for unit in self.d.sentry['rabbitmq-server']:
+            rid, code = unit.run('relation-ids cluster')
+            print('unit: %s , code: %s , output: %s' % (unit.info['unit_name'],
+                                                        code, rid))
+            assert code == 0
+
+            clustered, code = unit.run('relation-get -r %s clustered %s'
+                                       % (rid, unit.info['unit_name']))
+            print('unit: %s , code: %s , output: %s' % (unit.info['unit_name'],
+                                                        code, clustered))
+            assert code == 0
+
+            hostname, code = unit.run('hostname')
+            print('unit: %s , code: %s , output: %s' % (unit.info['unit_name'],
+                                                        code, hostname))
+            assert code == 0
+            assert hostname == clustered
+
     def test_200_rmq_cinder_amqp_relation(self):
         """Verify the rabbitmq-server:cinder amqp relation data"""
         u.log.debug('Checking rmq:cinder amqp relation data...')
