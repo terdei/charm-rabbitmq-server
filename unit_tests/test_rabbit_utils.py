@@ -689,3 +689,24 @@ class UtilsTests(CharmTestCase):
         rabbit_utils.check_cluster_memberships()
         mock_forget_cluster_node.assert_called_with(
             'rabbit@juju-devel3-machine-42')
+
+    @mock.patch('rabbitmq_context.psutil.NUM_CPUS', 2)
+    @mock.patch('rabbitmq_context.relation_ids')
+    @mock.patch('rabbitmq_context.config')
+    def test_render_rabbitmq_env(self, mock_config, mock_relation_ids):
+        mock_relation_ids.return_value = []
+        mock_config.return_value = 3
+        with mock.patch('rabbit_utils.render') as mock_render:
+            ctxt = {rabbit_utils.ENV_CONF:
+                    rabbit_utils.CONFIG_FILES[rabbit_utils.ENV_CONF]}
+            rabbit_utils.ConfigRenderer(ctxt).write(
+                rabbit_utils.ENV_CONF)
+
+            ctxt = {'settings': {'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                                 "'+A 6'",
+                                 'RABBITMQ_SERVER_START_ARGS':
+                                 "'-proto_dist inet6_tcp'"}}
+            mock_render.assert_called_with('rabbitmq-env.conf',
+                                           '/etc/rabbitmq/rabbitmq-env.conf',
+                                           ctxt,
+                                           perms=420)

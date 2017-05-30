@@ -86,7 +86,8 @@ class RmqBasicDeployment(OpenStackAmuletDeployment):
            """
         this_service = {
             'name': 'rabbitmq-server',
-            'units': 3
+            'units': 3,
+            'constraints': {'cpu-cores': 2},
         }
         other_services = [
             {'name': 'cinder'},

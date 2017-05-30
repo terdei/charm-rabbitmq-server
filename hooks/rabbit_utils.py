@@ -26,6 +26,7 @@ from collections import OrderedDict
 from rabbitmq_context import (
     RabbitMQSSLContext,
     RabbitMQClusterContext,
+    RabbitMQEnvContext,
 )
 
 from charmhelpers.core.templating import render
@@ -120,7 +121,9 @@ CONFIG_FILES = OrderedDict([
         'services': ['rabbitmq-server']
     }),
     (ENV_CONF, {
-        'hook_contexts': None,
+        'hook_contexts': [
+            RabbitMQEnvContext(),
+        ],
         'services': ['rabbitmq-server']
     }),
     (ENABLED_PLUGINS, {
@@ -513,53 +516,6 @@ def leave_cluster():
         raise
 
 
-def update_rmq_env_conf(hostname=None, ipv6=False):
-    """Update or append environment config.
-
-    rabbitmq.conf.d is not present on all releases, so use or create
-    rabbitmq-env.conf instead.
-    """
-
-    keyvals = {}
-    if ipv6:
-        keyvals['RABBITMQ_SERVER_START_ARGS'] = "'-proto_dist inet6_tcp'"
-
-    if hostname:
-        keyvals['RABBITMQ_NODENAME'] = hostname
-
-    out = []
-    keys_found = []
-    if os.path.exists(ENV_CONF):
-        for line in open(ENV_CONF).readlines():
-            for key, val in keyvals.items():
-                if line.strip().startswith(key):
-                    keys_found.append(key)
-                    line = '%s=%s' % (key, val)
-
-            out.append(line)
-
-    for key, val in keyvals.items():
-        log('Updating %s, %s=%s' % (ENV_CONF, key, val))
-        if key not in keys_found:
-            out.append('%s=%s' % (key, val))
-
-    with open(ENV_CONF, 'wb') as conf:
-        conf.write('\n'.join(out))
-        # Ensure newline at EOF
-        conf.write('\n')
-
-
-def get_node_name():
-    if not os.path.exists(ENV_CONF):
-        return None
-    env_conf = open(ENV_CONF, 'r').readlines()
-    node_name = None
-    for l in env_conf:
-        if l.startswith('RABBITMQ_NODENAME'):
-            node_name = l.split('=')[1].strip()
-    return node_name
-
-
 def _manage_plugin(plugin, action):
     os.environ['HOME'] = '/root'
     _rabbitmq_plugins = \
@@ -672,12 +628,6 @@ def get_rabbit_password(username, password=None, local=False):
             # cluster relation is not yet started, use on-disk
             _password = get_rabbit_password_on_disk(username, password)
         return _password
-
-
-def bind_ipv6_interface():
-    out = "RABBITMQ_SERVER_START_ARGS='-proto_dist inet6_tcp'\n"
-    with open(ENV_CONF, 'wb') as conf:
-        conf.write(out)
 
 
 def update_hosts_file(map):

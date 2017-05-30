@@ -89,6 +89,26 @@ options:
         - ['/', 'queue1', 10, 20]
         - ['/', 'queue2', 200, 300]
         Wildcards '*' are accepted to monitor all vhosts and/or queues
+  connection-backlog:
+    type: int
+    default:
+    description: |
+      Overrides the size of the connection backlog maintained by the server.
+      Environments with large numbers of clients will want to set this value
+      higher than the default (default value varies with rabbtimq version, see
+      https://www.rabbitmq.com/networking.html for more info).
+  erl-vm-io-thread-multiplier:
+    type: int
+    default:
+    description: |
+      Multiplier used to calculate the number of threads used in the erl vm
+      worker thread pool using the number of CPU cores extant in
+      the host system. The upstream docs recommend that this multiplier be
+      > 12 per core - we use 24 as default so that we end up with roughly the
+      same as current rabbitmq package defaults and that is what is used
+      internally to the charm if no value is set here. Also, if this value is
+      left unset and this application is running inside a container, the number
+      of threads will be capped based on a maximum of 2 cores.
   # SSL configuration
   ssl:
     type: string

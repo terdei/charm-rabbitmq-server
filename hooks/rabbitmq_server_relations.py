@@ -361,6 +361,8 @@ def update_cookie(leaders_cookie=None):
 
 
 @hooks.hook('ha-relation-joined')
+@rabbit.restart_on_change({rabbit.ENV_CONF:
+                           rabbit.restart_map()[rabbit.ENV_CONF]})
 def ha_joined():
     corosync_bindiface = config('ha-bindiface')
     corosync_mcastport = config('ha-mcastport')
@@ -385,14 +387,8 @@ def ha_joined():
         log('ha_joined: No ceph relation yet, deferring.')
         return
 
-    name = '%s@localhost' % SERVICE_NAME
-    if rabbit.get_node_name() != name and vip_only is False:
-        log('Stopping rabbitmq-server.')
-        service_stop('rabbitmq-server')
-        rabbit.update_rmq_env_conf(hostname='%s@localhost' % SERVICE_NAME,
-                                   ipv6=config('prefer-ipv6'))
-    else:
-        log('Node name already set to %s.' % name)
+    ctxt = {rabbit.ENV_CONF: rabbit.CONFIG_FILES[rabbit.ENV_CONF]} 
+    rabbit.ConfigRenderer(ctxt).write(rabbit.ENV_CONF)
 
     relation_settings = {}
     relation_settings['corosync_bindiface'] = corosync_bindiface

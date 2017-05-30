@@ -12,28 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from charmhelpers.contrib.ssl.service import ServiceCA
+import base64
+import grp
+import os
+import pwd
+import re
+import sys
 
+import ssl_utils
+
+from charmhelpers.contrib.ssl.service import ServiceCA
+from charmhelpers.core.host import is_container
+from charmhelpers.fetch import apt_install
 from charmhelpers.core.hookenv import (
     open_port,
     close_port,
     config,
     log,
+    service_name,
+    relation_ids,
+    DEBUG,
+    WARNING,
     ERROR,
 )
 
-import sys
-import pwd
-import grp
-import os
-import base64
+# python-six in ensured by charmhelpers import so we put this here.
+import six
+try:
+    import psutil
+except ImportError:
+    if six.PY2:
+        apt_install('python-psutil', fatal=True)
+    else:
+        apt_install('python3-psutil', fatal=True)
+    import psutil
 
-import ssl_utils
 
 ssl_key_file = "/etc/rabbitmq/rabbit-server-privkey.pem"
 ssl_cert_file = "/etc/rabbitmq/rabbit-server-cert.pem"
 ssl_ca_file = "/etc/rabbitmq/rabbit-server-ca.pem"
 RABBITMQ_CTL = '/usr/sbin/rabbitmqctl'
+ENV_CONF = '/etc/rabbitmq/rabbitmq-env.conf'
+
+# Rabbimq docs recommend min. 12 threads per core (see LP: #1693561)
+# NOTE(hopem): these defaults give us roughly the same as the default shipped
+#              with the version of rabbitmq in ubuntu xenial (3.5.7) - see
+#              https://tinyurl.com/rabbitmq-3-5-7 for exact value. Note that
+#              this default has increased with newer versions so we should
+#              track this and keep the charm up-to-date.
+DEFAULT_MULTIPLIER = 24
+MAX_DEFAULT_THREADS = DEFAULT_MULTIPLIER * 2
 
 
 def convert_from_base64(v):
@@ -136,6 +164,99 @@ class RabbitMQSSLContext(object):
 class RabbitMQClusterContext(object):
 
     def __call__(self):
-        return {
-            'cluster_partition_handling': config('cluster-partition-handling'),
-        }
+        ctxt = {'cluster_partition_handling':
+                config('cluster-partition-handling')}
+
+        if config('connection-backlog'):
+            ctxt['connection_backlog'] = config('connection-backlog')
+
+        return ctxt
+
+
+class RabbitMQEnvContext(object):
+
+    def calculate_threads(self):
+        """
+        Determine the number of erl vm threads in pool based in cpu resources
+        available.
+
+        Number of threads will be limited to MAX_DEFAULT_WORKERS in
+        container environments where no worker-multipler configuration
+        option been set.
+
+        @returns int: number of io threads to allocate
+        """
+
+        try:
+            num_cpus = psutil.cpu_count()
+        except AttributeError:
+            num_cpus = psutil.NUM_CPUS
+
+        multiplier = (config('erl-vm-io-thread-multiplier') or
+                      DEFAULT_MULTIPLIER)
+
+        log("Calculating erl vm io thread pool size based on num_cpus={} and "
+            "multiplier={}".format(num_cpus, multiplier), DEBUG)
+
+        count = int(num_cpus * multiplier)
+        if multiplier > 0 and count == 0:
+            count = 1
+
+        if config('erl-vm-io-thread-multiplier') is None and is_container():
+            # NOTE(hopem): Limit unconfigured erl-vm-io-thread-multiplier
+            #              to MAX_DEFAULT_THREADS to avoid insane pool
+            #              configuration in LXD containers on large servers.
+            count = min(count, MAX_DEFAULT_THREADS)
+
+        log("erl vm io thread pool size = {} (capped={})"
+            .format(count, is_container()), DEBUG)
+
+        return count
+
+    def __call__(self):
+        """Write rabbitmq-env.conf according to charm config.
+
+        We never overwrite RABBITMQ_NODENAME to ensure that we don't break
+        clustered rabbitmq.
+        """
+        blacklist = ['RABBITMQ_NODENAME']
+
+        context = {'settings': {}}
+        key = 'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS'
+        context['settings'][key] = "'+A {}'".format(self.calculate_threads())
+
+        if config('prefer-ipv6'):
+            key = 'RABBITMQ_SERVER_START_ARGS'
+            context['settings'][key] = "'-proto_dist inet6_tcp'"
+
+        # TODO: this is legacy HA and should be removed since it is now
+        # deprecated.
+        if relation_ids('ha'):
+            if not config('ha-vip-only'):
+                # TODO: do we need to remove this setting if it already exists
+                # and the above is false?
+                context['settings']['RABBITMQ_NODENAME'] = \
+                    '{}@localhost'.format(service_name())
+
+        if os.path.exists(ENV_CONF):
+            for line in open(ENV_CONF).readlines():
+                if re.search('^\s*#', line) or not line.strip('\n'):
+                    # ignore commented or blank lines
+                    continue
+
+                _line = line.partition("=")
+                key = _line[0].strip()
+                val = _line[2].strip()
+
+                if _line[1] != "=":
+                    log("Unable to parse line '{}' from {}".format(line,
+                                                                   ENV_CONF),
+                        WARNING)
+                    continue
+
+                if key in blacklist:
+                    # Keep original
+                    log("Leaving {} setting untouched".format(key), DEBUG)
+                    context['settings'][key] = val
+
+        return context

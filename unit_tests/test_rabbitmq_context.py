@@ -16,6 +16,7 @@ import rabbitmq_context
 
 import mock
 import unittest
+import tempfile
 
 
 class TestRabbitMQSSLContext(unittest.TestCase):
@@ -89,7 +90,133 @@ class TestRabbitMQClusterContext(unittest.TestCase):
 
         self.assertEqual(
             rabbitmq_context.RabbitMQClusterContext().__call__(), {
-                'cluster_partition_handling': "ignore"
+                'cluster_partition_handling': "ignore",
+                'connection_backlog': "ignore"
             })
 
-        config.assert_called_once_with("cluster-partition-handling")
+        config.assert_has_calls([mock.call("cluster-partition-handling"),
+                                 mock.call("connection-backlog")])
+
+
+class TestRabbitMQEnvContext(unittest.TestCase):
+
+    @mock.patch.object(rabbitmq_context.psutil, 'NUM_CPUS', 2)
+    @mock.patch.object(rabbitmq_context, 'relation_ids', lambda *args: [])
+    @mock.patch.object(rabbitmq_context, 'service_name')
+    @mock.patch.object(rabbitmq_context, 'config')
+    def test_rabbitmqenv(self, mock_config, mock_service_name):
+        config = {}
+
+        def fake_config(key):
+            return config.get(key)
+
+        mock_service_name.return_value = 'svc_foo'
+        mock_config.side_effect = fake_config
+
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            with mock.patch('rabbitmq_context.ENV_CONF', tmpfile.name):
+                config['prefer-ipv6'] = True
+                config['erl-vm-io-thread-multiplier'] = 36
+                ctxt = rabbitmq_context.RabbitMQEnvContext()()
+                self.assertEqual(ctxt['settings'],
+                                 {'RABBITMQ_SERVER_START_ARGS':
+                                  "'-proto_dist inet6_tcp'",
+                                  'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                                  "'+A 72'"})
+
+    @mock.patch.object(rabbitmq_context.psutil, 'NUM_CPUS', 2)
+    @mock.patch.object(rabbitmq_context, 'relation_ids')
+    @mock.patch.object(rabbitmq_context, 'service_name')
+    @mock.patch.object(rabbitmq_context, 'config')
+    def test_rabbitmqenv_legacy_ha_support(self, mock_config,
+                                           mock_service_name,
+                                           mock_relation_ids):
+        config = {}
+
+        def fake_config(key):
+            return config.get(key)
+
+        def fake_relation_ids(key):
+            if 'ha':
+                return ['ha:1']
+
+        mock_relation_ids.side_effect = fake_relation_ids
+        mock_service_name.return_value = 'svc_foo'
+        mock_config.side_effect = fake_config
+
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            with mock.patch('rabbitmq_context.ENV_CONF', tmpfile.name):
+                ctxt = rabbitmq_context.RabbitMQEnvContext()()
+                self.assertEqual(ctxt['settings'],
+                                 {'RABBITMQ_NODENAME': 'svc_foo@localhost',
+                                  'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                                  "'+A 48'"})
+
+        mock_relation_ids.side_effect = lambda key: []
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            with mock.patch('rabbitmq_context.ENV_CONF', tmpfile.name):
+                ctxt = rabbitmq_context.RabbitMQEnvContext()()
+                self.assertEqual(ctxt['settings'],
+                                 {'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                                  "'+A 48'"})
+
+    @mock.patch.object(rabbitmq_context.psutil, 'NUM_CPUS', 2)
+    @mock.patch.object(rabbitmq_context, 'relation_ids')
+    @mock.patch.object(rabbitmq_context, 'service_name')
+    @mock.patch.object(rabbitmq_context, 'config')
+    def test_rabbitmqenv_existing_nodename(self, mock_config,
+                                           mock_service_name,
+                                           mock_relation_ids):
+        def fake_relation_ids(key):
+            if 'ha':
+                return ['ha:1']
+
+        mock_relation_ids.side_effect = fake_relation_ids
+        mock_service_name.return_value = 'svc_foo'
+        mock_config.return_value = None
+
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            with mock.patch('rabbitmq_context.ENV_CONF', tmpfile.name):
+                with open(tmpfile.name, 'w') as fd:
+                    fd.write("RABBITMQ_NODENAME = blah@localhost")
+
+                ctxt = rabbitmq_context.RabbitMQEnvContext()()
+                self.assertEqual(ctxt['settings'],
+                                 {'RABBITMQ_NODENAME': 'blah@localhost',
+                                  'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                                  "'+A 48'"})
+
+    @mock.patch.object(rabbitmq_context, 'relation_ids', lambda *args: [])
+    @mock.patch.object(rabbitmq_context.psutil, 'NUM_CPUS', 128)
+    @mock.patch.object(rabbitmq_context, 'service_name')
+    @mock.patch.object(rabbitmq_context, 'config')
+    def test_rabbitmqenv_in_container(self, mock_config, mock_service_name):
+        mock_service_name.return_value = 'svc_foo'
+
+        config = {}
+
+        def fake_config(key):
+            return config.get(key)
+
+        mock_config.side_effect = fake_config
+
+        with mock.patch.object(rabbitmq_context, 'is_container') as \
+                mock_is_ctnr:
+            mock_is_ctnr.return_value = True
+            ctxt = rabbitmq_context.RabbitMQEnvContext()()
+            self.assertEqual(ctxt['settings'],
+                             {'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                              "'+A 48'"})
+
+            config['erl-vm-io-thread-multiplier'] = 24
+            ctxt = rabbitmq_context.RabbitMQEnvContext()()
+            self.assertEqual(ctxt['settings'],
+                             {'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                              "'+A 3072'"})
+
+            del config['erl-vm-io-thread-multiplier']
+            mock_is_ctnr.return_value = False
+            ctxt = rabbitmq_context.RabbitMQEnvContext()()
+            self.assertEqual(ctxt['settings'],
+                             {'RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS':
+                              "'+A 3072'"})
