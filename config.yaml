@@ -75,20 +75,20 @@ options:
       Minimum number of units expected to exist before charm will attempt to
       form a rabbitmq cluster.
   stats_cron_schedule:
-      type: string
-      default: '*/5 * * * *'
-      description: |
-        Cron schedule used to generate rabbitmq stats. If unset
-        no stats will be generated.
+    type: string
+    default: '*/5 * * * *'
+    description: |
+      Cron schedule used to generate rabbitmq stats. To disable,
+      either unset this config option or set it to an empty string ('').
   queue_thresholds:
-      type: string
-      default: "[['\\*', '\\*', 100, 200]]"
-      description: |
-        List of RabbitMQ queue size check thresholds. Interpreted as YAML
-        in format [<vhost>, <queue>, <warn>, <crit>]
-        - ['/', 'queue1', 10, 20]
-        - ['/', 'queue2', 200, 300]
-        Wildcards '*' are accepted to monitor all vhosts and/or queues.
+    type: string
+    default: "[['\\*', '\\*', 100, 200]]"
+    description: |
+      List of RabbitMQ queue size check thresholds. Interpreted as YAML
+      in format [<vhost>, <queue>, <warn>, <crit>]
+      - ['/', 'queue1', 10, 20]
+      - ['/', 'queue2', 200, 300]
+      Wildcards '*' are accepted to monitor all vhosts and/or queues.
   connection-backlog:
     type: int
     default:
