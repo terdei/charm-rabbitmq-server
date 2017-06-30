@@ -50,8 +50,6 @@ from charmhelpers.contrib.hardening.harden import harden
 
 from charmhelpers.fetch import (
     add_source,
-    apt_update,
-    apt_install,
 )
 
 from charmhelpers.core.hookenv import (
@@ -117,7 +115,8 @@ STATS_DATAFILE = os.path.join(RABBIT_DIR, 'data',
 @harden()
 def install():
     pre_install_hooks()
-    # NOTE(jamespage) install actually happens in config_changed hook
+    add_source(config('source'), config('key'))
+    rabbit.install_or_upgrade_packages()
 
 
 def validate_amqp_config_tracker(f):
@@ -631,8 +630,6 @@ def update_nrpe_checks():
 @harden()
 def upgrade_charm():
     pre_install_hooks()
-    add_source(config('source'), config('key'))
-    apt_update(fatal=True)
 
     # Ensure older passwd files in /var/lib/juju are moved to
     # /var/lib/rabbitmq which will end up replicated if clustered
@@ -666,7 +663,6 @@ MAN_PLUGIN = 'rabbitmq_management'
 @rabbit.restart_on_change(rabbit.restart_map())
 @harden()
 def config_changed():
-
     # Update hosts with this unit's information
     rabbit.update_hosts_file(
         {rabbit.get_unit_ip(config_override=rabbit.CLUSTER_OVERRIDE_CONFIG,
@@ -675,15 +671,16 @@ def config_changed():
 
     # Add archive source if provided
     add_source(config('source'), config('key'))
-    apt_update(fatal=True)
     # Copy in defaults file for updated ulimits
     shutil.copyfile(
         'templates/rabbitmq-server',
         '/etc/default/rabbitmq-server')
+
     # Install packages to ensure any changes to source
-    # result in an upgrade if applicable.
-    status_set('maintenance', 'Installing/upgrading RabbitMQ packages')
-    apt_install(rabbit.PACKAGES, fatal=True)
+    # result in an upgrade if applicable only if we change the 'source' 
+    # config option
+    if rabbit.archive_upgrade_available():
+        rabbit.install_or_upgrade_packages()
 
     open_port(5672)
 
