@@ -11,6 +11,9 @@ options:
       .
       The last option should be used in conjunction with the key configuration
       option.
+      .
+      Changing the source option on already deployed service/application will
+      trigger the upgrade.
   key:
     type: string
     default:
