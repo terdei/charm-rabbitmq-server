@@ -121,7 +121,7 @@ def install():
 
 def validate_amqp_config_tracker(f):
     """Decorator to mark all existing tracked amqp configs as stale so that
-    they are refreshed the next time the current unit leader. 
+    they are refreshed the next time the current unit leader.
     """
     def _validate_amqp_config_tracker(*args, **kwargs):
         if not is_leader():
@@ -677,7 +677,7 @@ def config_changed():
         '/etc/default/rabbitmq-server')
 
     # Install packages to ensure any changes to source
-    # result in an upgrade if applicable only if we change the 'source' 
+    # result in an upgrade if applicable only if we change the 'source'
     # config option
     if rabbit.archive_upgrade_available():
         rabbit.install_or_upgrade_packages()
@@ -782,6 +782,16 @@ if __name__ == '__main__':
         hooks.execute(sys.argv)
     except UnregisteredHookError as e:
         log('Unknown hook {} - skipping.'.format(e))
-    # Gated client updates
-    update_clients()
+
+    # NOTE(niedbalski): we skip running update_clients on
+    # update-status as this might  workload overhead on the
+    # cloud at every tick of the update-status hook. (LP:#1717579).
+    (hook, skip) = (os.path.basename(sys.argv[0]), ('update-status', ))
+    if hook in skip:
+        log("Skipping to run update_clients on hook: {} - skip: {}".format(
+            hook, ",".join(skip)), DEBUG)
+    else:
+        # Gated client updates
+        update_clients()
+
     rabbit.assess_status(rabbit.ConfigRenderer(rabbit.CONFIG_FILES))
