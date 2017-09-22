@@ -109,6 +109,7 @@ STATS_CRONFILE = '/etc/cron.d/rabbitmq-stats'
 STATS_DATAFILE = os.path.join(RABBIT_DIR, 'data',
                               '{}_queue_stats.dat'
                               ''.format(rabbit.get_unit_hostname()))
+INITIAL_CLIENT_UPDATE_KEY = 'initial_client_update_done'
 
 
 @hooks.hook('install.real')
@@ -211,6 +212,11 @@ def update_clients():
         for rid in relation_ids('amqp'):
             for unit in related_units(rid):
                 amqp_changed(relation_id=rid, remote_unit=unit)
+        kvstore = kv()
+        update_done = kvstore.get(INITIAL_CLIENT_UPDATE_KEY, False)
+        if not update_done:
+            kvstore.set(key=INITIAL_CLIENT_UPDATE_KEY, value=True)
+            kvstore.flush()
 
 
 @validate_amqp_config_tracker
@@ -655,6 +661,9 @@ def upgrade_charm():
     # 'clustered' for existing deployments (LP: #1691510).
     rabbit.cluster_with()
 
+    # Ensure all client connections are up to date on upgrade
+    update_clients()
+
 
 MAN_PLUGIN = 'rabbitmq_management'
 
@@ -782,16 +791,13 @@ if __name__ == '__main__':
         hooks.execute(sys.argv)
     except UnregisteredHookError as e:
         log('Unknown hook {} - skipping.'.format(e))
-
-    # NOTE(niedbalski): we skip running update_clients on
-    # update-status as this might  workload overhead on the
-    # cloud at every tick of the update-status hook. (LP:#1717579).
-    (hook, skip) = (os.path.basename(sys.argv[0]), ('update-status', ))
-    if hook in skip:
-        log("Skipping to run update_clients on hook: {} - skip: {}".format(
-            hook, ",".join(skip)), DEBUG)
-    else:
-        # Gated client updates
+    # This solves one off problems waiting for the cluster to complete
+    # It will get executed only once as soon as leader_node_is_ready()
+    # or client_node_is_ready() returns True
+    # Subsequent client requests will be handled by normal
+    # amqp-relation-changed hooks
+    kvstore = kv()
+    if not kvstore.get(INITIAL_CLIENT_UPDATE_KEY, False):
         update_clients()
 
     rabbit.assess_status(rabbit.ConfigRenderer(rabbit.CONFIG_FILES))
