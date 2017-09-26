@@ -83,6 +83,14 @@ options:
     description: |
       Cron schedule used to generate rabbitmq stats. To disable,
       either unset this config option or set it to an empty string ('').
+  cron-timeout:
+    type: int
+    default: 300
+    description: |
+      Run a command with a time limit specified in seconds in cron.
+      This timeout will govern to the rabbitmq stats capture, and that once
+      the timeout is reached a SIGINT is sent to the program, if it doesn't
+      exits before 10 seconds a SIGKILL is sent.
   queue_thresholds:
     type: string
     default: "[['\\*', '\\*', 100, 200]]"
