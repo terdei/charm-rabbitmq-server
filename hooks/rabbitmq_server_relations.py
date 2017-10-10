@@ -109,6 +109,8 @@ STATS_CRONFILE = '/etc/cron.d/rabbitmq-stats'
 STATS_DATAFILE = os.path.join(RABBIT_DIR, 'data',
                               '{}_queue_stats.dat'
                               ''.format(rabbit.get_unit_hostname()))
+CRONJOB_CMD = ("{schedule} root timeout -k 10s -s SIGINT {timeout} "
+               "{command} 2>&1 | logger -p local0.notice\n")
 INITIAL_CLIENT_UPDATE_KEY = 'initial_client_update_done'
 
 
@@ -590,7 +592,9 @@ def update_nrpe_checks():
               os.path.join(NAGIOS_PLUGINS, 'check_rabbitmq_queues.py'))
     if config('stats_cron_schedule'):
         script = os.path.join(SCRIPTS_DIR, 'collect_rabbitmq_stats.sh')
-        cronjob = "{} root {}\n".format(config('stats_cron_schedule'), script)
+        cronjob = CRONJOB_CMD.format(schedule=config('stats_cron_schedule'),
+                                     timeout=config('cron-timeout'),
+                                     command=script)
         rsync(os.path.join(charm_dir(), 'scripts',
                            'collect_rabbitmq_stats.sh'), script)
         write_file(STATS_CRONFILE, cronjob)
