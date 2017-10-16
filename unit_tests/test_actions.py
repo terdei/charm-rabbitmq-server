@@ -62,7 +62,8 @@ class ClusterStatusTestCase(CharmTestCase):
         self.check_output.return_value = 'Cluster status OK'
         actions.cluster_status([])
         self.check_output.assert_called_once_with(['rabbitmqctl',
-                                                   'cluster_status'])
+                                                   'cluster_status'],
+                                                  universal_newlines=True)
         self.action_set.assert_called()
 
     def test_cluster_status_execption(self):
@@ -70,7 +71,8 @@ class ClusterStatusTestCase(CharmTestCase):
                                                                    "Failure")
         actions.cluster_status([])
         self.check_output.assert_called_once_with(['rabbitmqctl',
-                                                   'cluster_status'])
+                                                   'cluster_status'],
+                                                  universal_newlines=True)
         self.action_set.assert_called()
         self.action_fail.assert_called()
 

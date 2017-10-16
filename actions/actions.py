@@ -52,7 +52,8 @@ def resume(args):
 def cluster_status(args):
     """Return the output of 'rabbitmqctl cluster_status'."""
     try:
-        clusterstat = check_output(['rabbitmqctl', 'cluster_status'])
+        clusterstat = check_output(['rabbitmqctl', 'cluster_status'],
+                                   universal_newlines=True)
         action_set({'output': clusterstat})
     except CalledProcessError as e:
         action_set({'output': e.output})
